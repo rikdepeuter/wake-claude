@@ -97,6 +97,29 @@ al in de cache. Dat is de minimale prijs van een nieuwe, bereikbare sessie.
 Wat dit debugbaar maakte: een schermafbeelding van **alleen het Claude-venster**
 (`GetWindowRect` + `CopyFromScreen`). Zonder die afbeelding bleef het blind toetsen.
 
+## Wat het bouwen van de exe nog opleverde
+
+Gemeten op 17 september 2026 met `wake-claude.exe`.
+
+- **De app pauzeert zelf.** Na 900 s zonder activiteit: `[WarmLifecycle:session] Idle timeout reached`,
+  gevolgd door `Pausing session local_… (idle_timeout)`, tenzij Remote Control verbonden is
+  (`Skipping pause … remote control is active`). Een sessie die haar verbinding verliest, is dus binnen
+  een kwartier gestopt.
+- **Een gepauzeerde sessie start niet met `code/continue`.** De link brengt ze in beeld, maar het
+  proces start pas met een bericht. Dat maakt geen verschil: bereikbaar maken kost toch een beurt.
+- **Het register loopt achter.** `lastFocusedAt` werd niet bijgewerkt bij het openen, en een nieuwe
+  sessie stond pas ~10 s na haar aanmaak in het register. Het log is sneller en betrouwbaarder:
+  - `LocalSessions.setFocusedSession: sessionId=<id>` - welke sessie in beeld staat (`null` op het
+    scherm voor een nieuwe sessie)
+  - `Enabling remote control for session <id>`, gevolgd door `[remote-control] bridge_state: "connected"`
+  - het log staat in `%LOCALAPPDATA%\Claude\logs\main.log`, geroteerd naar `main1.log` rond 10 MB
+- **Enter te vroeg doet niets.** Kort na het laden van het nieuwe-sessiescherm werd Enter genegeerd; een
+  tweede poging enkele seconden later werkte. De exe probeert opnieuw zolang dat scherm er nog staat.
+- **Een naam die de sessie zichzelf geeft, blijft staan.** De app zet eerst een automatische titel
+  (`titleSource: "auto"`), `set_session_title` overschrijft die (`titleSource: "tool"`) en die blijft.
+- **Archiveren via de sessie werkt** zonder goedkeuring in bypass-modus; de app archiveert ook de
+  Remote Control-sessie op de server.
+
 ## Officiele functie: mappen aanbieden via Remote Control
 
 De app kan mappen op deze computer aanbieden, zodat je vanaf een ander toestel **zelf een nieuwe sessie
