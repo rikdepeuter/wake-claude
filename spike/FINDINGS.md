@@ -52,7 +52,28 @@ nooit met een bericht of een sessie leeft: `claude agents --json` toont het zond
 - de koppeling staat in `%APPDATA%\Claude\claude-code-sessions\**\local_<uuid>.json`, samen met `title`
   en `isArchived`
 
-## Open
+## Waarom Remote Control niet terugkomt
 
-Remote Control van buitenaf aanzetten, zonder Claude-sessie. Te onderzoeken: een item in het
-commandopalet (`Ctrl+K`), of een link of parameter in de app-code.
+Uit de app-code (`app.asar`, sessiebeheer):
+
+- Aanzetten op een sessie zonder actieve beurt faalt met *"requires an active session. Send a message
+  first."* (`reason: "no_active_session"`).
+- Een gewenste Remote Control wordt bewaard (`remoteControlUserEnabled`, `remoteControlUserRequested`) en
+  hersteld met beleid `"next_turn"`: pas bij de **volgende beurt**, niet bij het opstarten van het proces.
+
+Gevolg: een bestaande, stilstaande sessie wordt van buitenaf nooit bereikbaar zonder beurt. Een bericht
+van een ander toestel komt er ook niet door, want dat heeft net die verbinding nodig. Het proces
+opstarten is gratis; bereikbaar maken kost minstens een beurt, en die beurt kost de volledige context.
+
+## Instellingen in `%APPDATA%\Claude\claude_desktop_config.json`
+
+- `preferences.ccRemoteControlDefaultEnabled: true` - nieuwe Code-sessies krijgen Remote Control
+  automatisch, zodra ze een beurt gehad hebben
+- `preferences.remoteToolsDeviceName` - de naam waaronder deze computer op andere toestellen verschijnt
+
+## Officiele functie: mappen aanbieden via Remote Control
+
+De app kan mappen op deze computer aanbieden, zodat je vanaf een ander toestel **zelf een nieuwe sessie
+start** in die map ("Add a folder to Remote Control", vastgepinde mapslots, meldingen voor "a remotely
+started Claude Code session"). Op deze machine zijn nog geen mappen toegevoegd. Dat dekt het deel
+"op aanvraag een nieuwe sessie starten" zonder eigen exe of API.
