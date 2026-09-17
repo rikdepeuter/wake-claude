@@ -50,6 +50,33 @@ namespace WakeClaude
         }
     }
 
+    /// <summary>
+    /// De Claude-app komt uit de Microsoft Store. Windows leidt haar schrijfacties naar AppData om
+    /// naar de map van het pakket. Wie zelf vanuit die app draait ziet de omgeleide kopie, wie van
+    /// buitenaf draait (bijvoorbeeld een geplande taak) de oude. Daarom altijd de pakketmap eerst.
+    /// </summary>
+    static class AppPaths
+    {
+        const string Package = "Claude_pzs8sxrjxfjjc";
+
+        public static string Roaming { get { return Kies(Environment.SpecialFolder.ApplicationData, "Roaming"); } }
+        public static string Local { get { return Kies(Environment.SpecialFolder.LocalApplicationData, "Local"); } }
+
+        static string Kies(Environment.SpecialFolder map, string tak)
+        {
+            var gewoon = Path.Combine(Environment.GetFolderPath(map), "Claude");
+            var pakket = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Packages", Package, "LocalCache", tak, "Claude");
+            return Directory.Exists(pakket) ? pakket : gewoon;
+        }
+
+        /// <summary>Eigen logboek en toestand, buiten AppData: dat wordt namelijk omgeleid.</summary>
+        public static string Eigen
+        {
+            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".wake-claude"); }
+        }
+    }
+
     static class Time
     {
         public static long NowMs() { return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); }
@@ -61,7 +88,7 @@ namespace WakeClaude
     {
         static string Root
         {
-            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Claude", "claude-code-sessions"); }
+            get { return Path.Combine(AppPaths.Roaming, "claude-code-sessions"); }
         }
 
         public static List<Session> Load()
@@ -168,7 +195,7 @@ namespace WakeClaude
 
         static string LogDir
         {
-            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Claude", "logs"); }
+            get { return Path.Combine(AppPaths.Local, "logs"); }
         }
 
         public static AppLog Load()

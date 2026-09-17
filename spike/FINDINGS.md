@@ -1,7 +1,7 @@
 # Spike: een sessie tot leven wekken zonder tokens
 
 Gemeten op 17 september 2026, Claude-desktop-app 2.110.1 (Microsoft Store), CLI 2.1.271.
-Proefsessie "Test" (`local_e90e329b-...`), kleine context, eigen transcript.
+Proefsessie "Test", kleine context, eigen transcript.
 
 ## Resultaat
 

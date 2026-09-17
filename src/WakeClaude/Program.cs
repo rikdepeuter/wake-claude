@@ -10,6 +10,9 @@ namespace WakeClaude
 {
     enum Mode { Resume, Fresh, New }
 
+    /// <summary>Wat te doen met een gestopte sessie die groter is dan --max-context.</summary>
+    enum TooLarge { Skip, Replace, Revive }
+
     static class ExitCodes
     {
         public const int Ok = 0, Other = 1, Arguments = 2, App = 3, Ui = 4, Timeout = 5;
@@ -29,13 +32,53 @@ namespace WakeClaude
         public string Prompt;
         public int TimeoutSeconds = 60;
         public long MaxContext = 200000;
+        public TooLarge TooLarge = TooLarge.Skip;
+        public int OnlyIfIdleMinutes;
+        public int RetryAfterMinutes = 60;
         public bool DryRun;
         public bool Json;
     }
 
+    /// <summary>Onthoudt mislukte pogingen, zodat een geplande taak niet blijft hameren.</summary>
+    static class State
+    {
+        static readonly string File = System.IO.Path.Combine(AppPaths.Eigen, "state.json");
+
+        public static string Path { get { return File; } }
+
+        static IDictionary<string, object> Read()
+        {
+            try { return Json.Parse(System.IO.File.ReadAllText(File)) as IDictionary<string, object> ?? new Dictionary<string, object>(); }
+            catch { return new Dictionary<string, object>(); }
+        }
+
+        public static DateTime? LastFailure(string key)
+        {
+            object v;
+            DateTime t;
+            if (Read().TryGetValue(key, out v) && v != null &&
+                DateTime.TryParse(Convert.ToString(v, CultureInfo.InvariantCulture), CultureInfo.InvariantCulture, DateTimeStyles.None, out t))
+                return t;
+            return null;
+        }
+
+        public static void Record(string key, bool failed)
+        {
+            try
+            {
+                var state = Read();
+                if (failed) state[key] = DateTime.Now.ToString("o", CultureInfo.InvariantCulture);
+                else state.Remove(key);
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(File));
+                System.IO.File.WriteAllText(File, Json.Write(state));
+            }
+            catch { } // de toestand bijhouden mag het wekken nooit doen mislukken
+        }
+    }
+
     static class Log
     {
-        static readonly string File = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "wake-claude", "wake-claude.log");
+        static readonly string File = System.IO.Path.Combine(AppPaths.Eigen, "wake-claude.log");
 
         public static void Info(string message)
         {
@@ -43,7 +86,7 @@ namespace WakeClaude
             Console.Error.WriteLine(line);
             try
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(File));
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(File));
                 System.IO.File.AppendAllText(File, line + Environment.NewLine, Encoding.UTF8);
             }
             catch { } // loggen mag het wekken nooit doen mislukken
@@ -61,7 +104,10 @@ Opties:
   --folder <pad>          map voor een nieuwe sessie (standaard D:\)
   --prompt ""<tekst>""      eerste bericht voor de sessie
   --timeout <seconden>    hoe lang wachten tot de sessie bereikbaar is (standaard 60)
-  --max-context <tokens>  resume: grotere gestopte sessie niet heractiveren maar vervangen (standaard 200000)
+  --max-context <tokens>  resume: grens waarboven een gestopte sessie te duur is om te wekken (standaard 200000)
+  --if-too-large <keuze>  wat dan te doen: skip (standaard), replace of revive
+  --only-if-idle <min>    niets doen als er recenter invoer van muis of toetsenbord was
+  --retry-after <min>     na een mislukking dezelfde opdracht zo lang met rust laten (standaard 60)
   --dry-run               tonen wat er zou gebeuren, zonder iets te doen
   --json                  resultaat als JSON
 
@@ -69,7 +115,8 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
 
         static int Main(string[] args)
         {
-            Console.OutputEncoding = Encoding.UTF8;
+            // Als geplande taak is er geen console; dan mislukt het zetten van de codering.
+            try { Console.OutputEncoding = Encoding.UTF8; } catch { }
             AppWindow.SetProcessDPIAware();
 
             Options options;
@@ -106,6 +153,10 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
                 exitCode = ExitCodes.Other;
             }
             result["exitcode"] = exitCode;
+            // Overslaan is geen poging: de wachttijd na een mislukking mag er niet door wegvallen.
+            object actie;
+            if (!options.DryRun && !(result.TryGetValue("actie", out actie) && (string)actie == "overgeslagen"))
+                State.Record(Key(options), exitCode != ExitCodes.Ok);
             Log.Info("Resultaat: " + Json.Write(result));
 
             if (options.Json) Console.WriteLine(Json.Write(result));
@@ -146,6 +197,18 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
                     case "--prompt": o.Prompt = value(); break;
                     case "--timeout": o.TimeoutSeconds = PositiveInt(a, value()); break;
                     case "--max-context": o.MaxContext = PositiveInt(a, value()); break;
+                    case "--only-if-idle": o.OnlyIfIdleMinutes = PositiveInt(a, value()); break;
+                    case "--retry-after": o.RetryAfterMinutes = PositiveInt(a, value()); break;
+                    case "--if-too-large":
+                        var keuze = value();
+                        switch (keuze.ToLowerInvariant())
+                        {
+                            case "skip": o.TooLarge = TooLarge.Skip; break;
+                            case "replace": o.TooLarge = TooLarge.Replace; break;
+                            case "revive": o.TooLarge = TooLarge.Revive; break;
+                            default: throw new WakeException(ExitCodes.Arguments, "--if-too-large verwacht skip, replace of revive.");
+                        }
+                        break;
                     case "--dry-run": o.DryRun = true; break;
                     case "--json": o.Json = true; break;
                     default:
@@ -178,6 +241,7 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
         {
             if (o.Mode == Mode.New)
             {
+                if (Skip(o, result)) return;
                 CreateNew(o, new List<string>(), "modus new", result);
                 return;
             }
@@ -209,19 +273,66 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
                 var target = matches[0];
                 var context = Transcript.ContextTokens(target.CliSessionId);
                 result["contextTokens"] = context;
-                if (context <= o.MaxContext)
+                var teGroot = "gestopte sessie is te groot om te heractiveren (" + context + " > " + o.MaxContext + " tokens)";
+
+                if (context > o.MaxContext && o.TooLarge == TooLarge.Skip)
+                {
+                    result["actie"] = "overgeslagen";
+                    result["sessie"] = target.LocalId;
+                    result["reden"] = teGroot + "; --if-too-large replace vervangt ze, revive wekt ze toch";
+                    return;
+                }
+                if (Skip(o, result)) return;
+                if (context <= o.MaxContext || o.TooLarge == TooLarge.Revive)
                 {
                     Revive(o, target, result);
                     return;
                 }
-                CreateNew(o, matches.Select(s => s.LocalId).ToList(),
-                    "gestopte sessie is te groot om te heractiveren (" + context + " > " + o.MaxContext + " tokens)", result);
+                CreateNew(o, matches.Select(s => s.LocalId).ToList(), teGroot, result);
                 return;
             }
 
+            if (Skip(o, result)) return;
             CreateNew(o, matches.Select(s => s.LocalId).ToList(),
                 matches.Count == 0 ? "geen sessie met deze naam gevonden" : "gestopte sessie met deze naam wordt vervangen", result);
         }
+
+        /// <summary>
+        /// Redenen om niets te doen, ook al is er werk: iemand zit aan de computer, of een eerdere
+        /// poging mislukte kort geleden. Beide zouden een geplande taak anders om de tien minuten
+        /// opnieuw laten klikken en typen.
+        /// </summary>
+        static bool Skip(Options o, Dictionary<string, object> result)
+        {
+            if (o.DryRun) return false;
+
+            if (o.OnlyIfIdleMinutes > 0)
+            {
+                var idle = AppWindow.UserIdle();
+                if (idle < TimeSpan.FromMinutes(o.OnlyIfIdleMinutes))
+                {
+                    result["actie"] = "overgeslagen";
+                    result["reden"] = "iemand gebruikt de computer (" + (int)idle.TotalSeconds + " s geleden invoer)";
+                    return true;
+                }
+            }
+
+            var failed = State.LastFailure(Key(o));
+            Log.Info("toestand: " + State.Path + " => " + (failed.HasValue ? failed.Value.ToString("HH:mm:ss") : "geen mislukking"));
+            if (failed.HasValue)
+            {
+                var ago = DateTime.Now - failed.Value;
+                if (ago < TimeSpan.FromMinutes(o.RetryAfterMinutes))
+                {
+                    result["actie"] = "overgeslagen";
+                    result["reden"] = "vorige poging mislukte " + (int)ago.TotalMinutes + " min geleden; opnieuw na " + o.RetryAfterMinutes + " min";
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        static string Key(Options o) { return o.Mode.ToString().ToLowerInvariant() + "|" + (o.Name ?? ""); }
 
         // --- nieuwe sessie ---
 

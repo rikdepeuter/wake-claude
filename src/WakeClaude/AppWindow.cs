@@ -55,6 +55,15 @@ namespace WakeClaude
             return IntPtr.Zero;
         }
 
+        /// <summary>Hoe lang geleden iemand muis of toetsenbord gebruikte, ook via een remote sessie.</summary>
+        public static TimeSpan UserIdle()
+        {
+            var info = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf(typeof(LASTINPUTINFO)) };
+            if (!GetLastInputInfo(ref info)) return TimeSpan.MaxValue;
+            var ms = unchecked((uint)Environment.TickCount - info.dwTime);
+            return TimeSpan.FromMilliseconds(ms);
+        }
+
         public static void OpenLink(string url)
         {
             Log.Info("Link: " + (url.Length > 140 ? url.Substring(0, 140) + "…" : url));
@@ -129,6 +138,9 @@ namespace WakeClaude
         const uint INPUT_MOUSE = 0, INPUT_KEYBOARD = 1;
         const uint KEYEVENTF_KEYUP = 0x2, KEYEVENTF_UNICODE = 0x4;
         const uint MOUSEEVENTF_LEFTDOWN = 0x2, MOUSEEVENTF_LEFTUP = 0x4;
+
+        [StructLayout(LayoutKind.Sequential)] struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+        [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
 
         [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
         [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
