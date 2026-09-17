@@ -198,7 +198,7 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
                     case "--timeout": o.TimeoutSeconds = PositiveInt(a, value()); break;
                     case "--max-context": o.MaxContext = PositiveInt(a, value()); break;
                     case "--only-if-idle": o.OnlyIfIdleMinutes = PositiveInt(a, value()); break;
-                    case "--retry-after": o.RetryAfterMinutes = PositiveInt(a, value()); break;
+                    case "--retry-after": o.RetryAfterMinutes = PositiveInt(a, value(), 0); break;   // 0 = geen wachttijd
                     case "--if-too-large":
                         var keuze = value();
                         switch (keuze.ToLowerInvariant())
@@ -229,11 +229,11 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
             return o;
         }
 
-        static int PositiveInt(string option, string text)
+        static int PositiveInt(string option, string text, int minimum = 1)
         {
             int n;
-            if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out n) || n <= 0)
-                throw new WakeException(ExitCodes.Arguments, option + " verwacht een positief getal.");
+            if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out n) || n < minimum)
+                throw new WakeException(ExitCodes.Arguments, option + " verwacht een getal vanaf " + minimum + ".");
             return n;
         }
 
@@ -353,7 +353,7 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
                                "&q=" + Uri.EscapeDataString(prompt) + "&source=desktop_action");
             // Het nieuwe-sessiescherm zet in het log de focus op "geen sessie". Zonder dat scherm
             // zou Enter een concept in een bestaande sessie kunnen versturen.
-            if (!WaitUntil(15, () => AppLog.Load().NewSessionScreenSince(t0)))
+            if (!WaitUntil(15, () => AppLog.Load().CurrentFocus() == null))
                 throw new WakeException(ExitCodes.Ui, "De app toonde het scherm voor een nieuwe sessie niet.");
             Thread.Sleep(2000);
 
@@ -367,7 +367,7 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
                 .FirstOrDefault();
             for (int attempt = 1; attempt <= 4 && created == null; attempt++)
             {
-                if (!AppLog.Load().NewSessionScreenSince(t0)) break;
+                if (AppLog.Load().CurrentFocus() != null) break;
                 Thread.Sleep(1000);
                 Log.Info("Enter, poging " + attempt);
                 AppWindow.PressEnter(handle);
@@ -437,13 +437,13 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
             var t0 = Time.NowMs();
             AppWindow.OpenLink("claude://code/continue?session=" + Uri.EscapeDataString(target.LocalId) + "&source=desktop_action");
 
-            if (!WaitUntil(15, () => AppLog.Load().FocusedSince(target.LocalId, t0)))
+            if (!WaitUntil(15, () => AppLog.Load().CurrentFocus() == target.LocalId))
                 throw new WakeException(ExitCodes.Ui, "De app opende de sessie niet.");
             Thread.Sleep(2000);
 
             // Nooit typen in een andere sessie: de doelsessie moet nog steeds de laatst geopende zijn.
             // Het proces van een door de app gepauzeerde sessie start pas met het bericht zelf.
-            if (!AppLog.Load().FocusedSince(target.LocalId, t0))
+            if (AppLog.Load().CurrentFocus() != target.LocalId)
                 throw new WakeException(ExitCodes.Ui, "Een andere sessie kwam in beeld; er is niets getypt.");
 
             AppWindow.ClickComposer(handle);

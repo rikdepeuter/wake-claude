@@ -228,34 +228,22 @@ namespace WakeClaude
 
         const string FocusMarker = "setFocusedSession: sessionId=";
 
-        /// <summary>Is dit de sessie die de app sinds dit tijdstip als laatste in beeld bracht?</summary>
-        public bool FocusedSince(string localId, long sinceMs)
+        /// <summary>
+        /// Wat de app nu toont: het id van de sessie in beeld, of null voor het scherm van een nieuwe
+        /// sessie. De app logt enkel wijzigingen, dus dit kijkt naar de laatste regel in het hele log,
+        /// niet naar een tijdvenster: stond het juiste scherm er al, dan komt er geen nieuwe regel bij.
+        /// </summary>
+        public string CurrentFocus()
         {
-            var since = Time.Local(sinceMs).AddSeconds(-1);
             string last = null;
             foreach (var entry in lines)
             {
-                if (entry.Key < since) continue;
                 var i = entry.Value.IndexOf(FocusMarker, StringComparison.Ordinal);
                 if (i < 0) continue;
                 var id = entry.Value.Substring(i + FocusMarker.Length).Trim();
-                if (id != "null") last = id;
+                last = id == "null" ? null : id;
             }
-            return last == localId;
-        }
-
-        /// <summary>Staat sinds dit tijdstip het scherm voor een nieuwe sessie vooraan (focus op geen sessie)?</summary>
-        public bool NewSessionScreenSince(long sinceMs)
-        {
-            var since = Time.Local(sinceMs).AddSeconds(-1);
-            string last = null;
-            foreach (var entry in lines)
-            {
-                if (entry.Key < since) continue;
-                var i = entry.Value.IndexOf(FocusMarker, StringComparison.Ordinal);
-                if (i >= 0) last = entry.Value.Substring(i + FocusMarker.Length).Trim();
-            }
-            return last == "null";
+            return last;
         }
 
         /// <summary>Werd Remote Control aangezet of actief gezien voor deze sessie, na dit tijdstip, zonder latere fout?</summary>
