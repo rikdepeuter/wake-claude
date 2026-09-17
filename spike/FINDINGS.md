@@ -71,9 +71,39 @@ opstarten is gratis; bereikbaar maken kost minstens een beurt, en die beurt kost
   automatisch, zodra ze een beurt gehad hebben
 - `preferences.remoteToolsDeviceName` - de naam waaronder deze computer op andere toestellen verschijnt
 
+## Een nieuwe sessie starten die meteen bereikbaar is
+
+Werkt, getest op 17 september 2026:
+
+1. `claude://code/new?folder=<pad>&q=<prompt>&source=desktop_action`
+   opent het nieuwe-sessiescherm met de map ingesteld en de prompt **ingevuld, niet verstuurd**.
+2. **Klik in het invoerveld**, dan Enter. Enter alleen deed niets: de focus lag niet in het veld, en er
+   hing een pop-up "Rate your conversation" over de rechterkant van het invoerveld.
+3. De sessie start, draait de beurt, en krijgt automatisch Remote Control
+   (`ccRemoteControlDefaultEnabled: true`).
+
+Kost van die eerste beurt op een lege sessie:
+
+| | tokens |
+|---|---|
+| invoer, niet gecachet | 2 |
+| cache gelezen | 42.638 |
+| cache geschreven | 10.873 |
+| uitvoer | 4 |
+
+Die ~53.000 tokens zijn de systeemprompt en tooldefinities, grotendeels gedeeld met andere sessies en dus
+al in de cache. Dat is de minimale prijs van een nieuwe, bereikbare sessie.
+
+Wat dit debugbaar maakte: een schermafbeelding van **alleen het Claude-venster**
+(`GetWindowRect` + `CopyFromScreen`). Zonder die afbeelding bleef het blind toetsen.
+
 ## Officiele functie: mappen aanbieden via Remote Control
 
 De app kan mappen op deze computer aanbieden, zodat je vanaf een ander toestel **zelf een nieuwe sessie
 start** in die map ("Add a folder to Remote Control", vastgepinde mapslots, meldingen voor "a remotely
-started Claude Code session"). Op deze machine zijn nog geen mappen toegevoegd. Dat dekt het deel
-"op aanvraag een nieuwe sessie starten" zonder eigen exe of API.
+started Claude Code session"). Maar de initialisatie staat achter een feature gate:
+
+    if (!gate) { log("[sessions-bridge] init skipped - gate off (yukon_silver_cuttlefish_desktop)") }
+
+Bij deze gebruiker staat die gate uit: de instellingen verschijnen niet onder
+Instellingen > Claude Code (of > Desktop). Niet bruikbaar zolang de uitrol hem niet bereikt.
