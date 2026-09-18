@@ -1,6 +1,6 @@
 # Houdt één sessie altijd bereikbaar vanaf een ander toestel.
 #
-# "Remote worker general" wordt nooit heractiveerd: valt haar verbinding weg, dan komt er een nieuwe
+# "Remote main" wordt nooit heractiveerd: valt haar verbinding weg, dan komt er een nieuwe
 # lege sessie met dezelfde naam en wordt de oude gearchiveerd. Vanuit die sessie kan je de andere
 # sessies wekken. Zit er iemand aan de computer, dan gebeurt er niets: de exe klikt en typt namelijk
 # in het venster van de app.
@@ -19,7 +19,7 @@ New-Item -ItemType Directory -Force (Split-Path $log) | Out-Null
 
 # Windows PowerShell 5.1 maakt van stderr van een programma een fout; de exe logt net naar stderr.
 $ErrorActionPreference = 'Continue'
-& $exe fresh 'Remote worker general' --only-if-idle 3 --timeout 120 --json 2>&1 |
+& $exe fresh 'Remote main' --only-if-idle 3 --timeout 120 --json 2>&1 |
     ForEach-Object { $_.ToString() } | Add-Content $log -Encoding UTF8
 "$(Get-Date -Format s) einde, exitcode $LASTEXITCODE" | Add-Content $log -Encoding UTF8
 

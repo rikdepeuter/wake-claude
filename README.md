@@ -43,7 +43,7 @@ mislukt, `5` timeout. Voortgang gaat naar stderr en naar `%USERPROFILE%\.wake-cl
 
 ## Altijd één sessie bereikbaar houden
 
-`keep-alive.ps1` draait `fresh "Remote worker general" --only-if-idle 3`: is die sessie niet meer
+`keep-alive.ps1` draait `fresh "Remote main" --only-if-idle 3`: is die sessie niet meer
 bereikbaar, dan komt er een nieuwe lege met dezelfde naam en wordt de oude gearchiveerd. Vanuit die
 sessie kan je de andere wekken. `install-task.ps1` registreert dat als taak, elke 10 minuten en bij
 aanmelden, onder je eigen account. Beheerdersrechten zijn er niet: de taak moet net in je aangemelde

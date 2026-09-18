@@ -21,7 +21,7 @@ $hoofd = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -Log
 
 Register-ScheduledTask -TaskName $naam -Action $actie -Trigger $elke10, $bijAanmelden `
     -Settings $instellingen -Principal $hoofd -Force `
-    -Description 'Start een nieuwe "Remote worker general"-sessie zodra die niet meer bereikbaar is.' | Out-Null
+    -Description 'Start een nieuwe "Remote main"-sessie zodra die niet meer bereikbaar is.' | Out-Null
 
 "Taak geregistreerd: $naam"
 Get-ScheduledTask -TaskName $naam | Select-Object TaskName, State
