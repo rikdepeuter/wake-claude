@@ -88,7 +88,13 @@ Vereist Visual Studio Build Tools (Roslyn `csc.exe`) en .NET Framework 4.x. Resu
 
 De Claude-app komt uit de Microsoft Store. Windows leidt haar schrijfacties naar `AppData` om naar
 `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\…`. Een programma dat vanuit de app start ziet
-die omgeleide kopie, een geplande taak ziet de oude. De exe leest daarom altijd eerst de pakketmap, en
-houdt haar eigen logboek en toestand in `%USERPROFILE%\.wake-claude`, buiten `AppData`.
+die omgeleide kopie, een geplande taak ziet de oude. Sinds een update van november 2026 verhuist de app
+haar gebruikersdata bovendien naar `%LOCALAPPDATA%\Claude-Data\<submap>` (nu `claude_pzs8sxrjxfjjc`).
+
+De exe legt daarom geen vaste plek vast. Ze bekijkt elke submap van `Claude-Data`, de pakketmap en de
+klassieke map, en neemt voor het sessieregister (`claude-code-sessions`) en voor het log (`logs`) de map
+waarin de app het laatst schreef. Achtergebleven oude kopieën winnen zo niet. Welke mappen gekozen werden,
+staat in het logboek. Vindt ze geen register, dan stopt ze met een fout in plaats van een nieuwe sessie
+te starten. Haar eigen logboek en toestand houdt ze in `%USERPROFILE%\.wake-claude`, buiten `AppData`.
 
 Zie `spike/FINDINGS.md` voor het onderzoek erachter.

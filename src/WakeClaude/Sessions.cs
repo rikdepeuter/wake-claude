@@ -51,23 +51,73 @@ namespace WakeClaude
     }
 
     /// <summary>
-    /// De Claude-app komt uit de Microsoft Store. Windows leidt haar schrijfacties naar AppData om
-    /// naar de map van het pakket. Wie zelf vanuit die app draait ziet de omgeleide kopie, wie van
-    /// buitenaf draait (bijvoorbeeld een geplande taak) de oude. Daarom altijd de pakketmap eerst.
+    /// Waar de app haar sessieregister en log bewaart. Dat is al meermaals verschoven:
+    /// - %APPDATA%\Claude en %LOCALAPPDATA%\Claude: de klassieke plek.
+    /// - %LOCALAPPDATA%\Packages\Claude_…\LocalCache\{Roaming,Local}\Claude: de Store-app, waarvan
+    ///   Windows de schrijfacties naar AppData omleidt. Een geplande taak ziet die omleiding niet.
+    /// - %LOCALAPPDATA%\Claude-Data\&lt;iets&gt;: sinds een update van november 2026 verhuist de app
+    ///   haar gebruikersdata daarheen. De naam van de submap is afgeleid van het pakket; die zoeken
+    ///   we zelf in plaats van ze vast te leggen.
+    /// Achtergebleven kopieën blijven soms staan. Daarom wint niet de eerste map die bestaat, maar de
+    /// map waar de app het laatst in schreef.
     /// </summary>
     static class AppPaths
     {
         const string Package = "Claude_pzs8sxrjxfjjc";
 
-        public static string Roaming { get { return Kies(Environment.SpecialFolder.ApplicationData, "Roaming"); } }
-        public static string Local { get { return Kies(Environment.SpecialFolder.LocalApplicationData, "Local"); } }
-
-        static string Kies(Environment.SpecialFolder map, string tak)
+        /// <summary>De map met claude-code-sessions\…\local_*.json, of null als er geen is.</summary>
+        public static string SessionsDir
         {
-            var gewoon = Path.Combine(Environment.GetFolderPath(map), "Claude");
-            var pakket = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Packages", Package, "LocalCache", tak, "Claude");
-            return Directory.Exists(pakket) ? pakket : gewoon;
+            get
+            {
+                return Nieuwste(Kandidaten("Roaming").Select(d => Path.Combine(d, "claude-code-sessions")),
+                    dir => Directory.EnumerateFiles(dir, "local_*.json", SearchOption.AllDirectories));
+            }
+        }
+
+        /// <summary>De map met main.log en main1.log, of null als er geen is.</summary>
+        public static string LogDir
+        {
+            get
+            {
+                return Nieuwste(Kandidaten("Local").Select(d => Path.Combine(d, "logs")),
+                    dir => Directory.EnumerateFiles(dir, "main*.log", SearchOption.TopDirectoryOnly));
+            }
+        }
+
+        /// <summary>Mogelijke datamappen van de app; tak is "Roaming" of "Local".</summary>
+        static IEnumerable<string> Kandidaten(string tak)
+        {
+            var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+            var data = Path.Combine(local, "Claude-Data");
+            if (Directory.Exists(data))
+                foreach (var dir in Directory.EnumerateDirectories(data))
+                    yield return dir;
+
+            yield return Path.Combine(local, "Packages", Package, "LocalCache", tak, "Claude");
+            var map = tak == "Roaming" ? Environment.SpecialFolder.ApplicationData : Environment.SpecialFolder.LocalApplicationData;
+            yield return Path.Combine(Environment.GetFolderPath(map), "Claude");
+        }
+
+        /// <summary>De bestaande map waarvan het nieuwste bestand (volgens bestanden) het recentst gewijzigd is.</summary>
+        static string Nieuwste(IEnumerable<string> dirs, Func<string, IEnumerable<string>> bestanden)
+        {
+            string best = null;
+            var bestTime = DateTime.MinValue;
+            foreach (var dir in dirs)
+            {
+                if (!Directory.Exists(dir)) continue;
+                DateTime time;
+                try
+                {
+                    time = bestanden(dir).Select(f => File.GetLastWriteTimeUtc(f)).DefaultIfEmpty(DateTime.MinValue).Max();
+                }
+                catch (IOException) { continue; }
+                catch (UnauthorizedAccessException) { continue; }
+                if (best == null || time > bestTime) { best = dir; bestTime = time; }
+            }
+            return best;
         }
 
         /// <summary>Eigen logboek en toestand, buiten AppData: dat wordt namelijk omgeleid.</summary>
@@ -83,20 +133,17 @@ namespace WakeClaude
         public static DateTime Local(long ms) { return DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime; }
     }
 
-    /// <summary>Leest %APPDATA%\Claude\claude-code-sessions\**\local_*.json.</summary>
+    /// <summary>Leest claude-code-sessions\**\local_*.json; zie AppPaths voor waar dat staat.</summary>
     static class Register
     {
-        static string Root
-        {
-            get { return Path.Combine(AppPaths.Roaming, "claude-code-sessions"); }
-        }
-
         public static List<Session> Load()
         {
             var result = new List<Session>();
-            if (!Directory.Exists(Root)) return result;
+            var root = AppPaths.SessionsDir;
+            if (root == null)
+                throw new WakeException(ExitCodes.Other, "Sessieregister van de app niet gevonden (claude-code-sessions). Is de app verhuisd?");
 
-            foreach (var file in Directory.EnumerateFiles(Root, "local_*.json", SearchOption.AllDirectories))
+            foreach (var file in Directory.EnumerateFiles(root, "local_*.json", SearchOption.AllDirectories))
             {
                 var o = TryRead(file);
                 if (o == null) continue;
@@ -193,18 +240,15 @@ namespace WakeClaude
 
         readonly List<KeyValuePair<DateTime, string>> lines = new List<KeyValuePair<DateTime, string>>();
 
-        static string LogDir
-        {
-            get { return Path.Combine(AppPaths.Local, "logs"); }
-        }
-
         public static AppLog Load()
         {
             var log = new AppLog();
+            var logDir = AppPaths.LogDir;
+            if (logDir == null) return log;
             // main1.log is het vorige, geroteerde log; eerst dat, dan het huidige.
             foreach (var name in new[] { "main1.log", "main.log" })
             {
-                var file = Path.Combine(LogDir, name);
+                var file = Path.Combine(logDir, name);
                 if (!File.Exists(file)) continue;
                 using (var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                 using (var reader = new StreamReader(fs, Encoding.UTF8))

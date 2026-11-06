@@ -246,6 +246,7 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
                 return;
             }
 
+            Log.Info("register: " + (AppPaths.SessionsDir ?? "(niet gevonden)") + ", log: " + (AppPaths.LogDir ?? "(niet gevonden)"));
             var running = Agents.Running();
             var rcLog = AppLog.Load();
             var matches = Register.Load()
