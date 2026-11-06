@@ -85,8 +85,8 @@ namespace WakeClaude
                 }
                 result["actie"] = "aangehaakt";
                 result["reden"] = "geregistreerde terminalsessie draait niet";
-                if (!string.IsNullOrWhiteSpace(o.Prompt))
-                    result["opmerking"] = "--prompt wordt genegeerd bij aanhaken; stuur het bericht via Remote Control";
+                if (!string.IsNullOrWhiteSpace(o.Prompt) || o.Images.Count > 0 || o.PasteImages)
+                    result["opmerking"] = "--prompt en bijlagen worden genegeerd bij aanhaken; stuur het bericht via Remote Control";
                 if (o.DryRun) return;
                 Launch(known, resume: true, prompt: null);
                 WaitRunning(known.Id, o.TimeoutSeconds);
@@ -105,6 +105,12 @@ namespace WakeClaude
             result["sessie"] = session.Id;
             result["map"] = session.Folder;
             if (!IsTrusted(session.Folder)) result["opmerking"] = "map is niet vertrouwd door Claude Code; zonder dat start de sessie niet";
+
+            // Bijlagen nu al wegschrijven, nog voor het venster opent: daarna hangt de nieuwe sessie
+            // niet meer af van de sessie die wake-claude aanriep.
+            var bijlagen = Attachments.Collect(o);
+            if (bijlagen != null) result["bijlagen"] = bijlagen.Files;
+
             if (o.DryRun) return;
             if (!IsTrusted(session.Folder))
                 throw new WakeException(ExitCodes.Arguments, "Map " + session.Folder + " is niet vertrouwd door Claude Code. Start eenmalig `claude` in die map en kies \"Yes, I trust this folder\".");
@@ -112,7 +118,8 @@ namespace WakeClaude
             // Eerst registreren: ook als het venster meteen sluit, kan restore het later opnieuw proberen.
             sessions.Add(session);
             Save(sessions);
-            Launch(session, resume: false, prompt: o.Prompt);
+            Launch(session, resume: false, prompt: Attachments.Decorate(o.Prompt, bijlagen),
+                   addDir: bijlagen != null ? bijlagen.Dir : null);
             WaitRunning(session.Id, o.TimeoutSeconds);
         }
 
@@ -194,7 +201,7 @@ namespace WakeClaude
 
         // --- starten ---
 
-        static void Launch(TerminalSession s, bool resume, string prompt)
+        static void Launch(TerminalSession s, bool resume, string prompt, string addDir = null)
         {
             // Een sessie zonder één bericht heeft nog geen transcript; --resume vindt dan niets en stopt.
             // Dan opnieuw starten met hetzelfde ID.
@@ -205,6 +212,8 @@ namespace WakeClaude
                 throw new WakeException(ExitCodes.Arguments, "Map " + s.Folder + " is niet vertrouwd door Claude Code. Start eenmalig `claude` in die map en kies \"Yes, I trust this folder\".");
             var args = new List<string> { resume ? "--resume" : "--session-id", s.Id, "--remote-control", s.Name };
             if (!string.IsNullOrWhiteSpace(prompt)) args.Add(prompt.Trim());
+            // --add-dir neemt meerdere mappen en zou een prompt erachter als map opslokken: dus laatst.
+            if (!string.IsNullOrEmpty(addDir)) { args.Add("--add-dir"); args.Add(addDir); }
             var exe = ClaudeExe();
             var commandLine = string.Join(" ", args.Select(Quote));
             Log.Info("Terminal: " + exe + " " + (commandLine.Length > 200 ? commandLine.Substring(0, 200) + "…" : commandLine) + " (in " + s.Folder + ")");

@@ -15,7 +15,7 @@ namespace WakeClaude
 
     static class ExitCodes
     {
-        public const int Ok = 0, Other = 1, Arguments = 2, App = 3, Ui = 4, Timeout = 5;
+        public const int Ok = 0, Other = 1, Arguments = 2, App = 3, Ui = 4, Timeout = 5, Busy = 6;
     }
 
     class WakeException : Exception
@@ -30,7 +30,12 @@ namespace WakeClaude
         public string Name;
         public string Folder = @"D:\";
         public string Prompt;
+        public List<string> Images = new List<string>();
+        public bool PasteImages;
+        /// <summary>De sessie die wake-claude aanroept; vroeg vastgehouden, want de omgeving wordt later gewist.</summary>
+        public string SessionId = Environment.GetEnvironmentVariable("CLAUDE_CODE_SESSION_ID");
         public int TimeoutSeconds = 60;
+        public int LockTimeoutSeconds = 180;
         public long MaxContext = 200000;
         public TooLarge TooLarge = TooLarge.Skip;
         public int OnlyIfIdleMinutes;
@@ -109,7 +114,10 @@ wake-claude.exe term-forget <naam>       uit het register halen (het venster bli
 Opties:
   --folder <pad>          map voor een nieuwe sessie (standaard D:\)
   --prompt ""<tekst>""      eerste bericht voor de sessie
+  --image <pad>           bijlage voor de nieuwe sessie (meermaals); enkel bij term
+  --paste-images          de afbeeldingen van het laatste bericht van de aanroepende sessie meesturen
   --timeout <seconden>    hoe lang wachten tot de sessie bereikbaar is (standaard 60)
+  --lock-timeout <sec>    hoe lang wachten op een andere wake-claude (standaard 180)
   --max-context <tokens>  resume: grens waarboven een gestopte sessie te duur is om te wekken (standaard 200000)
   --if-too-large <keuze>  wat dan te doen: skip (standaard), replace of revive
   --only-if-idle <min>    niets doen als er recenter invoer van muis of toetsenbord was
@@ -117,7 +125,11 @@ Opties:
   --dry-run               tonen wat er zou gebeuren, zonder iets te doen
   --json                  resultaat als JSON
 
-Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de interface mislukt, 5 timeout";
+Bijlagen komen in ~\.wake-claude\attachments en hun paden onderaan de prompt; de sessie leest ze met
+de Read tool. Ze worden meteen gekopieerd, dus de aanroepende sessie mag daarna /clear doen.
+
+Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de interface mislukt,
+5 timeout, 6 er draait al een wake-claude";
 
         static int Main(string[] args)
         {
@@ -141,33 +153,45 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
             result["naam"] = options.Name;
             if (options.DryRun) result["dryRun"] = true;
 
-            int exitCode;
+            int exitCode = ExitCodes.Other;
+            RunLock slot = null;
             try
             {
-                Log.Info("Start: " + string.Join(" ", args.Select(a => a.Contains(" ") ? "\"" + a + "\"" : a)));
-                Run(options, result);
-                exitCode = ExitCodes.Ok;
+                try
+                {
+                    Log.Info("Start: " + string.Join(" ", args.Select(a => a.Contains(" ") ? "\"" + a + "\"" : a)));
+                    if (Exclusief(options)) slot = RunLock.Acquire(options, result);
+                    Run(options, result);
+                    exitCode = ExitCodes.Ok;
+                }
+                catch (WakeException e)
+                {
+                    result["fout"] = e.Message;
+                    exitCode = e.ExitCode;
+                }
+                catch (Exception e)
+                {
+                    result["fout"] = e.ToString();
+                    exitCode = ExitCodes.Other;
+                }
+                result["exitcode"] = exitCode;
+                // Overslaan is geen poging: de wachttijd na een mislukking mag er niet door wegvallen.
+                object actie;
+                if (!options.DryRun && !(result.TryGetValue("actie", out actie) && (string)actie == "overgeslagen"))
+                    State.Record(Key(options), exitCode != ExitCodes.Ok);
             }
-            catch (WakeException e)
-            {
-                result["fout"] = e.Message;
-                exitCode = e.ExitCode;
-            }
-            catch (Exception e)
-            {
-                result["fout"] = e.ToString();
-                exitCode = ExitCodes.Other;
-            }
-            result["exitcode"] = exitCode;
-            // Overslaan is geen poging: de wachttijd na een mislukking mag er niet door wegvallen.
-            object actie;
-            if (!options.DryRun && !(result.TryGetValue("actie", out actie) && (string)actie == "overgeslagen"))
-                State.Record(Key(options), exitCode != ExitCodes.Ok);
+            finally { if (slot != null) slot.Dispose(); }   // ook state.json valt zo binnen de lock
             Log.Info("Resultaat: " + Json.Write(result));
 
             if (options.Json) Console.WriteLine(Json.Write(result));
             else Console.WriteLine(string.Join(Environment.NewLine, result.Where(kv => kv.Value != null).Select(kv => kv.Key + ": " + Format(kv.Value))));
             return exitCode;
+        }
+
+        /// <summary>Wie iets verandert, neemt de lock; wie enkel leest of toont, wacht nergens op.</summary>
+        static bool Exclusief(Options o)
+        {
+            return !o.DryRun && o.Mode != Mode.TermList;
         }
 
         static string Format(object value)
@@ -205,7 +229,10 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
                 {
                     case "--folder": o.Folder = value(); break;
                     case "--prompt": o.Prompt = value(); break;
+                    case "--image": o.Images.Add(value()); break;
+                    case "--paste-images": o.PasteImages = true; break;
                     case "--timeout": o.TimeoutSeconds = PositiveInt(a, value()); break;
+                    case "--lock-timeout": o.LockTimeoutSeconds = PositiveInt(a, value()); break;
                     case "--max-context": o.MaxContext = PositiveInt(a, value()); break;
                     case "--only-if-idle": o.OnlyIfIdleMinutes = PositiveInt(a, value()); break;
                     case "--retry-after": o.RetryAfterMinutes = PositiveInt(a, value(), 0); break;   // 0 = geen wachttijd
@@ -238,6 +265,10 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
                 throw new WakeException(ExitCodes.Arguments, "Ongeldige naam: maximaal 200 tekens, zonder aanhalingstekens of regeleinden.");
             if (!Directory.Exists(o.Folder))
                 throw new WakeException(ExitCodes.Arguments, "Map bestaat niet: " + o.Folder);
+            // De app-modi typen de prompt teken voor teken in het invoerveld en kunnen de bijlagemap
+            // niet openstellen (--add-dir). Daar beloven we dit dus niet.
+            if ((o.Images.Count > 0 || o.PasteImages) && o.Mode != Mode.Term)
+                throw new WakeException(ExitCodes.Arguments, "--image en --paste-images werken enkel bij term.");
             return o;
         }
 

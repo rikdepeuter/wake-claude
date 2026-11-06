@@ -28,7 +28,11 @@ Opties:
 
 - `--folder <pad>` - map voor een nieuwe sessie, standaard `D:\`
 - `--prompt "<tekst>"` - eerste bericht voor de sessie
+- `--image <pad>` - bijlage voor de nieuwe sessie, meermaals te geven; enkel bij `term`
+- `--paste-images` - de afbeeldingen van het laatste bericht van de aanroepende sessie meesturen; enkel
+  bij `term`
 - `--timeout <seconden>` - hoe lang wachten tot de sessie bereikbaar is, standaard 60
+- `--lock-timeout <seconden>` - hoe lang wachten op een andere wake-claude, standaard 180
 - `--max-context <tokens>` - bij `resume`: grens waarboven een gestopte sessie te duur is om te wekken,
   standaard 200000
 - `--if-too-large skip|replace|revive` - wat er dan gebeurt: niets doen (standaard), vervangen door een
@@ -39,7 +43,8 @@ Opties:
 - `--json` - resultaat als JSON op stdout
 
 Exitcodes: `0` gelukt, `1` andere fout, `2` argumenten, `3` app start niet, `4` stap in de interface
-mislukt, `5` timeout. Voortgang gaat naar stderr en naar `%USERPROFILE%\.wake-claude\wake-claude.log`.
+mislukt, `5` timeout, `6` er draait al een wake-claude. Voortgang gaat naar stderr en naar
+`%USERPROFILE%\.wake-claude\wake-claude.log`.
 
 ## Altijd één sessie bereikbaar houden
 
@@ -61,7 +66,7 @@ Naast sessies in de desktop-app kan wake-claude sessies starten in een eigen con
 zijbalk van de desktop-app, maar er wordt niets geklikt of getypt en een update van de app sluit ze niet.
 
 ```
-wake-claude.exe term <naam> [--folder <pad>] [--prompt "<tekst>"]
+wake-claude.exe term <naam> [--folder <pad>] [--prompt "<tekst>"] [--image <pad>] [--paste-images]
 wake-claude.exe term-restore
 wake-claude.exe term-list
 wake-claude.exe term-forget <naam>
@@ -89,6 +94,45 @@ wake-claude.exe term-forget <naam>
   die map te starten. Ook een vertrouwde map kan het opnieuw vragen, bv. als `.claude/settings.local.json`
   tools vooraf toestaat; dan meldt de sessie zich niet en zegt de timeout-fout dat het venster wacht.
 - `term-forget` haalt een sessie enkel uit het register; een open venster blijft draaien tot je het sluit.
+
+## Bijlagen meesturen
+
+De CLI neemt geen afbeeldingen aan op de commandoregel (`--file` werkt enkel met geüploade bestanden).
+Een sessie leest wél bestanden van schijf, en de Read tool toont een afbeelding echt als beeld. Daarom:
+`--image` en `--paste-images` zetten de bestanden klaar en zetten hun paden onderaan de prompt.
+
+```
+wake-claude.exe term "QGIS-situatie" --prompt "waarom valideert dit niet?" --paste-images
+```
+
+- **Waar ze landen:** `%USERPROFILE%\.wake-claude\attachments\<tijdstempel>\`, genummerd in de volgorde
+  waarin je ze gaf. Mappen ouder dan 30 dagen worden bij een volgende run opgeruimd.
+- **Meteen gekopieerd**, nog vóór het venster opent. Dat is het punt: de sessie die wake-claude aanriep
+  mag daarna `/clear` doen of haar scratchpad verliezen, de nieuwe sessie hangt nergens meer van af.
+- **`--paste-images`** haalt de afbeeldingen uit het transcript van de aanroepende sessie
+  (`CLAUDE_CODE_SESSION_ID`), uit het laatste bericht dat er bevat. Geplakte beelden staan daar als
+  base64; ze worden gedecodeerd naar `geplakt-1.png` enzovoort. Buiten een Claude-sessie faalt dit met
+  een uitleg: gebruik dan `--image`.
+- **`--add-dir`** wordt meegegeven voor de bijlagemap, zodat de sessie er zonder toestemmingsvraag bij
+  kan. Die vlag staat achteraan op de commandoregel: ze neemt meerdere mappen en zou een prompt die
+  erachter staat als map opslokken.
+- Enkel bij `term`. De app-modi typen de prompt teken voor teken in het invoerveld en kunnen `--add-dir`
+  niet meegeven, dus daar wordt het geweigerd. Bij terug aanhaken gaat er sowieso geen bericht uit.
+
+## Eén run tegelijk
+
+Het register en `state.json` worden gelezen, aangepast en teruggeschreven, en de app-modi klikken en
+typen in één venster. Twee runs tegelijk zouden dus elkaars registratie overschrijven, twee vensters
+voor dezelfde naam openen, of in elkaars invoerveld typen. Daarom neemt elke run die iets verandert
+eerst `%USERPROFILE%\.wake-claude\lock` (een bestand met `FileShare.None`), en houdt die vast tot het
+einde - ook tijdens het wachten tot de sessie zich meldt, want net dan zou een tweede run de sessie nog
+niet zien draaien.
+
+Wie moet wachten, zegt dat in het logboek en meldt achteraf `gewacht: <n> s op een andere wake-claude`.
+Duurt het langer dan `--lock-timeout` (standaard 180 s), dan stopt de run met exitcode 6 en noemt ze de
+houder (`lock.owner`: pid, modus en starttijd). `term-list` en elke `--dry-run` nemen geen lock: die
+lezen alleen, en het register wordt altijd via een tijdelijk bestand vervangen, dus een lezer ziet de
+oude of de nieuwe inhoud, nooit een halve.
 
 `install-terminal-task.ps1` registreert de taak "wake-claude terminal-restore": 30 s na het aanmelden
 wacht `terminal-restore.ps1` op het netwerk en draait `term-restore`. Log:
