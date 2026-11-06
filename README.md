@@ -43,6 +43,10 @@ mislukt, `5` timeout. Voortgang gaat naar stderr en naar `%USERPROFILE%\.wake-cl
 
 ## Altijd één sessie bereikbaar houden
 
+> Sinds 2026-11-06 is "Remote main" een terminalsessie (zie hieronder) en staat de taak
+> "wake-claude keep-alive" uit. Na een herstart sloeg de keep-alive "Remote main" over: het aanmelden
+> zelf telde als invoer voor `--only-if-idle`. Wat volgt, beschrijft de app-variant.
+
 `keep-alive.ps1` draait `resume "Remote main" --only-if-idle 3 --if-too-large replace`: is die
 sessie niet meer bereikbaar, dan wordt ze heractiveerd met behoud van context en geschiedenis. Enkel
 als ze niet bestaat of boven `--max-context` zit, komt er een nieuwe lege met dezelfde naam en wordt
