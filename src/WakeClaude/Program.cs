@@ -360,7 +360,9 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
 
             // De link vult de prompt enkel in; versturen gebeurt vanuit het invoerveld. Een Enter
             // te vroeg na het laden doet niets, dus opnieuw zolang er geen sessie is en het scherm er nog staat.
-            AppWindow.ClickComposer(handle);
+            // Sinds app 4.23118 staat er soms eerst een dialoog "Trust this workspace?" met de focus op
+            // Cancel: de eerste Enter sluit die, en daarna staat de focus niet meer in het invoerveld.
+            // Daarom voor elke Enter opnieuw in het invoerveld klikken.
             Session created = null;
             Func<Session> findCreated = () => Register.Load()
                 .Where(s => !before.Contains(s.LocalId) && s.CreatedAt >= t0 - 5000)
@@ -371,11 +373,12 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
                 if (AppLog.Load().CurrentFocus() != null) break;
                 Thread.Sleep(1000);
                 Log.Info("Enter, poging " + attempt);
+                AppWindow.ClickComposer(handle);
                 AppWindow.PressEnter(handle);
                 WaitUntil(6, () => (created = findCreated()) != null);
             }
             if (created == null && !WaitUntil(10, () => (created = findCreated()) != null))
-                throw new WakeException(ExitCodes.Ui, "Na Enter verscheen geen nieuwe sessie. Stond er een pop-up over het invoerveld?");
+                throw new WakeException(ExitCodes.Ui, "Na Enter verscheen geen nieuwe sessie. Staat er een dialoog (bv. 'Trust this workspace?') of pop-up over het invoerveld?");
 
             result["sessie"] = created.LocalId;
             Log.Info("Nieuwe sessie: " + created.LocalId);
