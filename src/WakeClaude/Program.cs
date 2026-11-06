@@ -8,7 +8,7 @@ using System.Threading;
 
 namespace WakeClaude
 {
-    enum Mode { Resume, Fresh, New }
+    enum Mode { Resume, Fresh, New, Term, TermRestore, TermList, TermForget }
 
     /// <summary>Wat te doen met een gestopte sessie die groter is dan --max-context.</summary>
     enum TooLarge { Skip, Replace, Revive }
@@ -100,6 +100,12 @@ namespace WakeClaude
 wake-claude.exe fresh  <naam> [opties]   actief: niets; anders nieuw, gestopte met die naam archiveren
 wake-claude.exe new   [<naam>] [opties]  altijd nieuw
 
+Terminalsessies (eigen consolevenster met Remote Control, los van de desktop-app, zonder klikken):
+wake-claude.exe term <naam> [opties]     draait: niets; geregistreerd: terug aanhaken (--resume); anders nieuw
+wake-claude.exe term-restore             alle geregistreerde terminalsessies die niet draaien terug aanhaken
+wake-claude.exe term-list                geregistreerde terminalsessies en of ze draaien
+wake-claude.exe term-forget <naam>       uit het register halen (het venster blijft open)
+
 Opties:
   --folder <pad>          map voor een nieuwe sessie (standaard D:\)
   --prompt ""<tekst>""      eerste bericht voor de sessie
@@ -131,7 +137,7 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
             if (options == null) { Console.WriteLine(Usage); return ExitCodes.Ok; }
 
             var result = new Dictionary<string, object>();
-            result["modus"] = options.Mode.ToString().ToLowerInvariant();
+            result["modus"] = args[0].ToLowerInvariant();
             result["naam"] = options.Name;
             if (options.DryRun) result["dryRun"] = true;
 
@@ -180,6 +186,10 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
                 case "resume": o.Mode = Mode.Resume; break;
                 case "fresh": o.Mode = Mode.Fresh; break;
                 case "new": o.Mode = Mode.New; break;
+                case "term": o.Mode = Mode.Term; break;
+                case "term-restore": o.Mode = Mode.TermRestore; break;
+                case "term-list": o.Mode = Mode.TermList; break;
+                case "term-forget": o.Mode = Mode.TermForget; break;
                 default: throw new WakeException(ExitCodes.Arguments, "Onbekende modus: " + args[0]);
             }
 
@@ -220,8 +230,10 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
             }
 
             if (o.Name == "") o.Name = null;
-            if (o.Name == null && o.Mode != Mode.New)
+            if (o.Name == null && o.Mode != Mode.New && o.Mode != Mode.TermRestore && o.Mode != Mode.TermList)
                 throw new WakeException(ExitCodes.Arguments, "Een naam is verplicht bij " + args[0] + ".");
+            if (o.Name != null && (o.Mode == Mode.TermRestore || o.Mode == Mode.TermList))
+                throw new WakeException(ExitCodes.Arguments, args[0] + " neemt geen naam.");
             if (o.Name != null && (o.Name.Length > 200 || o.Name.Contains("\"") || o.Name.Contains("\n")))
                 throw new WakeException(ExitCodes.Arguments, "Ongeldige naam: maximaal 200 tekens, zonder aanhalingstekens of regeleinden.");
             if (!Directory.Exists(o.Folder))
@@ -239,6 +251,15 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
 
         static void Run(Options o, Dictionary<string, object> result)
         {
+            // Terminalsessies: geen klikken of typen in de app, dus geen idle- of wachttijdcontrole nodig.
+            switch (o.Mode)
+            {
+                case Mode.Term: Terminal.Ensure(o, result); return;
+                case Mode.TermRestore: Terminal.Restore(o, result); return;
+                case Mode.TermList: Terminal.List(result); return;
+                case Mode.TermForget: Terminal.Forget(o, result); return;
+            }
+
             if (o.Mode == Mode.New)
             {
                 if (Skip(o, result)) return;

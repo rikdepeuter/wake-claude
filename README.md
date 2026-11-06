@@ -50,6 +50,46 @@ de oude gearchiveerd. Vanuit die sessie kan je de andere wekken. `install-task.p
 als taak, elke 10 minuten en bij aanmelden, onder je eigen account. Beheerdersrechten zijn er niet:
 de taak moet net in je aangemelde bureaubladsessie draaien om te kunnen klikken.
 
+## Terminalsessies
+
+Naast sessies in de desktop-app kan wake-claude sessies starten in een eigen consolevenster:
+`claude --remote-control "<naam>"`. Die verschijnen net zo in claude.ai/code, de mobiele app en de
+zijbalk van de desktop-app, maar er wordt niets geklikt of getypt en een update van de app sluit ze niet.
+
+```
+wake-claude.exe term <naam> [--folder <pad>] [--prompt "<tekst>"]
+wake-claude.exe term-restore
+wake-claude.exe term-list
+wake-claude.exe term-forget <naam>
+```
+
+| modus | draait | geregistreerd, gestopt | onbekend |
+|---|---|---|---|
+| `term` | niets doen | terug aanhaken | nieuwe starten en registreren |
+| `term-restore` | niets doen | terug aanhaken | - |
+
+- **Register:** `%USERPROFILE%\.wake-claude\terminal-sessions.json` met naam, map en sessie-ID. Het
+  gesprek zelf bewaart Claude Code onder `~/.claude/projects/<map>/<id>.jsonl`.
+- **Nieuw:** wake-claude kiest zelf het ID en start `claude --session-id <id> --remote-control "<naam>"`,
+  met `--prompt` als eerste bericht. Zonder prompt wordt er niets verstuurd en kost het niets.
+- **Terug aanhaken:** `claude --resume <id> --remote-control "<naam>"`. Geschiedenis en Remote
+  Control-link blijven dezelfde, en er gaat geen bericht uit: geen tokens. Een sessie zonder één
+  bericht heeft nog geen transcript; die start opnieuw met `--session-id` en hetzelfde ID.
+- **Draait ze?** Volgens `claude agents --json`, net als voor de app-sessies.
+- **Omgeving:** gestart vanuit een Claude-sessie erft de exe variabelen als `CLAUDE_CODE_CHILD_SESSION`
+  en een `ANTHROPIC_BASE_URL` naar de app; dan meldt de nieuwe sessie zich niet als agent. Alle
+  `CLAUDE*`-, `ANTHROPIC*`- en `MCP_*`-variabelen gaan daarom weg, behalve wat in je gebruikers- of
+  machineomgeving staat.
+- **Vertrouwen:** in een map die Claude Code nog niet vertrouwt, wacht de CLI op "Do you trust this
+  folder?". Dat beantwoordt wake-claude niet: het weigert te starten en vraagt je eenmalig `claude` in
+  die map te starten. Ook een vertrouwde map kan het opnieuw vragen, bv. als `.claude/settings.local.json`
+  tools vooraf toestaat; dan meldt de sessie zich niet en zegt de timeout-fout dat het venster wacht.
+- `term-forget` haalt een sessie enkel uit het register; een open venster blijft draaien tot je het sluit.
+
+`install-terminal-task.ps1` registreert de taak "wake-claude terminal-restore": 30 s na het aanmelden
+wacht `terminal-restore.ps1` op het netwerk en draait `term-restore`. Log:
+`%USERPROFILE%\.wake-claude\terminal-restore.log`. Deze taak staat los van "wake-claude keep-alive".
+
 ## Hoe het werkt
 
 - **Zoeken op naam:** exacte titel, hoofdletters tellen niet, gearchiveerde sessies niet. Bij meerdere
