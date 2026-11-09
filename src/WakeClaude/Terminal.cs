@@ -15,6 +15,8 @@ namespace WakeClaude
         public string Folder;
         public string Id;
         public string Created;
+        /// <summary>De pid van de laatste start: om haar venster te kunnen tonen of sluiten.</summary>
+        public int Pid;
     }
 
     /// <summary>
@@ -42,6 +44,7 @@ namespace WakeClaude
                     Folder = Json.Str(d, "folder"),
                     Id = Json.Str(d, "id"),
                     Created = Json.Str(d, "created"),
+                    Pid = (int)Json.Long(d, "pid"),
                 }).Where(s => s.Name != null && s.Id != null && s.Folder != null).ToList();
             }
             catch (FileNotFoundException) { return new List<TerminalSession>(); }
@@ -53,7 +56,7 @@ namespace WakeClaude
             Directory.CreateDirectory(Path.GetDirectoryName(File));
             var data = sessions.Select(s => new Dictionary<string, object>
             {
-                { "name", s.Name }, { "folder", s.Folder }, { "id", s.Id }, { "created", s.Created },
+                { "name", s.Name }, { "folder", s.Folder }, { "id", s.Id }, { "created", s.Created }, { "pid", (long)s.Pid },
             }).ToArray();
             var tmp = File + ".tmp";
             System.IO.File.WriteAllText(tmp, Json.Write(data), Encoding.UTF8);
@@ -69,9 +72,9 @@ namespace WakeClaude
         /// <summary>term: draait: niets; geregistreerd maar gestopt: terug aanhaken; onbekend: nieuw.</summary>
         public static void Ensure(Options o, Dictionary<string, object> result)
         {
-            var sessions = Load();
+            Dictionary<string, AgentInfo> running;
+            var sessions = Sync(result, out running, save: !o.DryRun);
             var known = Find(sessions, o.Name);
-            var running = Agents.Running();
 
             if (known != null)
             {
@@ -88,8 +91,9 @@ namespace WakeClaude
                 if (!string.IsNullOrWhiteSpace(o.Prompt) || o.Images.Count > 0 || o.PasteImages)
                     result["opmerking"] = "--prompt en bijlagen worden genegeerd bij aanhaken; stuur het bericht via Remote Control";
                 if (o.DryRun) return;
-                Launch(known, resume: true, prompt: null);
-                WaitRunning(known.Id, o.TimeoutSeconds);
+                Launch(known, resume: true, prompt: null, visible: o.Visible);
+                Save(sessions);
+                Ready(known, o, result);
                 return;
             }
 
@@ -119,15 +123,16 @@ namespace WakeClaude
             sessions.Add(session);
             Save(sessions);
             Launch(session, resume: false, prompt: Attachments.Decorate(o.Prompt, bijlagen),
-                   addDir: bijlagen != null ? bijlagen.Dir : null);
-            WaitRunning(session.Id, o.TimeoutSeconds);
+                   visible: o.Visible, addDir: bijlagen != null ? bijlagen.Dir : null);
+            Save(sessions);   // nu met de pid erbij, zodat haar venster terug te vinden is
+            Ready(session, o, result);
         }
 
         /// <summary>term-restore: elke geregistreerde sessie die niet draait, terug aanhaken.</summary>
         public static void Restore(Options o, Dictionary<string, object> result)
         {
-            var sessions = Load();
-            var running = Agents.Running();
+            Dictionary<string, AgentInfo> running;
+            var sessions = Sync(result, out running, save: !o.DryRun);
             var started = new List<string>();
             var alreadyRunning = new List<string>();
             var failed = new List<string>();
@@ -139,7 +144,7 @@ namespace WakeClaude
                 if (o.DryRun) { started.Add(s.Name); continue; }
                 try
                 {
-                    Launch(s, resume: true, prompt: null);
+                    Launch(s, resume: true, prompt: null, visible: o.Visible);
                     started.Add(s.Name);
                     Thread.Sleep(1500); // niet alle vensters tegelijk: elk proces verbindt met Remote Control
                 }
@@ -148,6 +153,7 @@ namespace WakeClaude
 
             if (!o.DryRun && started.Count > 0)
             {
+                Save(sessions);   // de pids van deze start bewaren
                 var deadline = DateTime.UtcNow.AddSeconds(o.TimeoutSeconds);
                 var waitFor = sessions.Where(s => started.Contains(s.Name)).ToList();
                 while (DateTime.UtcNow < deadline)
@@ -156,10 +162,14 @@ namespace WakeClaude
                     if (waitFor.All(s => running.ContainsKey(s.Id))) break;
                     Thread.Sleep(2000);
                 }
+                // Een sessie die zich niet meldt, wacht meestal op een vraag. Verborgen zou je die
+                // nooit zien, dus komt net dat venster in beeld.
                 foreach (var s in waitFor.Where(s => !running.ContainsKey(s.Id)))
                 {
                     started.Remove(s.Name);
-                    failed.Add(s.Name + " (meldt zich niet na " + o.TimeoutSeconds + " s; wacht het venster op een vraag?)");
+                    var shown = s.Pid > 0 && ConsoleWindow.Show(s.Pid);
+                    failed.Add(s.Name + " (meldt zich niet na " + o.TimeoutSeconds + " s; " +
+                               (shown ? "het venster staat nu zichtbaar, wacht het op een vraag?" : "geen venster gevonden") + ")");
                 }
             }
 
@@ -175,9 +185,22 @@ namespace WakeClaude
 
         public static void List(Dictionary<string, object> result)
         {
-            var running = Agents.Running();
+            Dictionary<string, AgentInfo> running;
+            // term-list neemt geen lock, dus hier enkel tonen; de volgende schrijvende actie bewaart het.
+            var sessions = Sync(result, out running, save: false);
             result["register"] = RegistryPath;
-            result["sessies"] = Load().Select(s => s.Name + " | " + (running.ContainsKey(s.Id) ? "draait" : "gestopt") + " | " + s.Folder + " | " + s.Id).ToList();
+            result["sessies"] = sessions.Select(s =>
+            {
+                AgentInfo agent;
+                var draait = running.TryGetValue(s.Id, out agent);
+                var venster = "-";
+                if (draait)
+                {
+                    var zichtbaar = ConsoleWindow.Visible(agent.Pid);
+                    venster = zichtbaar == null ? "geen venster" : zichtbaar.Value ? "zichtbaar" : "verborgen";
+                }
+                return s.Name + " | " + (draait ? "draait" : "gestopt") + " | " + venster + " | " + s.Folder + " | " + s.Id;
+            }).ToList();
         }
 
         /// <summary>term-forget: uit het register halen, zodat restore ze niet meer start. Het proces blijft draaien.</summary>
@@ -199,9 +222,117 @@ namespace WakeClaude
             Save(sessions);
         }
 
+        /// <summary>term-show / term-hide: het consolevenster van een draaiende sessie tonen of verbergen.</summary>
+        public static void Visibility(Options o, Dictionary<string, object> result, bool show)
+        {
+            List<TerminalSession> sessions;
+            var pid = Lookup(o, result, out sessions);
+            if (pid == 0) return;
+            result["actie"] = show ? "getoond" : "verborgen";
+            if (o.DryRun) return;
+            if (show ? ConsoleWindow.Show(pid) : ConsoleWindow.Hide(pid)) return;
+            result["actie"] = "niets";
+            result["reden"] = "geen consolevenster gevonden voor pid " + pid +
+                "; draait de sessie in Windows Terminal, dan heeft ze geen eigen venster";
+        }
+
+        /// <summary>term-stop: de sessie sluiten. Ze blijft geregistreerd, dus term-restore haalt ze terug.</summary>
+        public static void Stop(Options o, Dictionary<string, object> result)
+        {
+            List<TerminalSession> sessions;
+            var pid = Lookup(o, result, out sessions);
+            if (pid == 0) return;
+            result["actie"] = "gestopt";
+            result["reden"] = "blijft geregistreerd; term-restore haakt ze terug aan, term-forget haalt ze eruit";
+            if (o.DryRun) return;
+            result["hoe"] = ConsoleWindow.Stop(pid, o.TimeoutSeconds);
+            var known = Find(sessions, o.Name);
+            if (known != null) { known.Pid = 0; Save(sessions); }
+        }
+
+        /// <summary>De geregistreerde sessie opzoeken en haar pid teruggeven; 0 als ze niet draait.</summary>
+        static int Lookup(Options o, Dictionary<string, object> result, out List<TerminalSession> sessions)
+        {
+            Dictionary<string, AgentInfo> running;
+            sessions = Sync(result, out running, save: !o.DryRun);
+            var known = Find(sessions, o.Name);
+            if (known == null)
+                throw new WakeException(ExitCodes.Arguments, "Geen terminalsessie geregistreerd met de naam " + o.Name + ".");
+            result["sessie"] = known.Id;
+            var pid = PidOf(known, running);
+            if (pid == 0)
+            {
+                result["actie"] = "niets";
+                result["reden"] = "deze terminalsessie draait niet";
+                return 0;
+            }
+            result["pid"] = (long)pid;
+            return pid;
+        }
+
+        /// <summary>
+        /// De pid van een draaiende sessie: bij voorkeur die uit `claude agents --json`. Meldt de
+        /// sessie zich daar niet, bijvoorbeeld omdat ze op een vraag wacht, dan die uit het register,
+        /// maar enkel als het nog een draaiende claude.exe is: Windows hergebruikt pids.
+        /// </summary>
+        static int PidOf(TerminalSession s, Dictionary<string, AgentInfo> running)
+        {
+            AgentInfo agent;
+            if (running.TryGetValue(s.Id, out agent) && agent.Pid > 0) return agent.Pid;
+            return ConsoleWindow.IsClaude(s.Pid) ? s.Pid : 0;
+        }
+
+        /// <summary>Het register laden, kijken wat er draait, en verschoven sessie-IDs bijwerken.</summary>
+        static List<TerminalSession> Sync(Dictionary<string, object> result, out Dictionary<string, AgentInfo> running, bool save)
+        {
+            var sessions = Load();
+            running = Agents.Running();
+            var healed = Heal(sessions, running);
+            if (healed.Count == 0) return sessions;
+            result["bijgewerkt"] = healed;
+            if (save) Save(sessions);
+            return sessions;
+        }
+
+        /// <summary>
+        /// Een geregistreerde sessie kan onder een nieuw sessie-ID verder draaien: /clear geeft het
+        /// proces een nieuw ID, terwijl het venster en de Remote Control-naam dezelfde blijven. Het
+        /// register wees dan naar een ID dat niemand draait, zag de sessie als gestopt en zou er bij
+        /// de volgende term-restore een tweede naast starten. Daarom: staat het ID van een naam niet
+        /// bij de draaiende agents, maar draait er wel een claude.exe met `--remote-control "<naam>"`,
+        /// dan neemt het register dat ID over.
+        /// </summary>
+        static List<string> Heal(List<TerminalSession> sessions, Dictionary<string, AgentInfo> running)
+        {
+            var changed = new List<string>();
+            var missing = sessions.Where(s => !running.ContainsKey(s.Id)).ToList();
+            if (missing.Count == 0) return changed;
+
+            var names = Processes.RemoteControlNames();
+            if (names.Count == 0) return changed;
+            var byPid = new Dictionary<int, string>();
+            foreach (var kv in running) byPid[kv.Value.Pid] = kv.Key;
+
+            foreach (var s in missing)
+            {
+                foreach (var kv in names)
+                {
+                    if (!string.Equals(kv.Value, s.Name, StringComparison.OrdinalIgnoreCase)) continue;
+                    string id;
+                    if (!byPid.TryGetValue(kv.Key, out id)) continue;        // proces meldt zich niet als agent
+                    if (sessions.Any(other => other.Id == id)) continue;     // dit ID hoort al bij een andere naam
+                    changed.Add(s.Name + ": " + s.Id + " wordt " + id);
+                    s.Id = id;
+                    s.Pid = kv.Key;
+                    break;
+                }
+            }
+            return changed;
+        }
+
         // --- starten ---
 
-        static void Launch(TerminalSession s, bool resume, string prompt, string addDir = null)
+        static void Launch(TerminalSession s, bool resume, string prompt, bool visible, string addDir = null)
         {
             // Een sessie zonder één bericht heeft nog geen transcript; --resume vindt dan niets en stopt.
             // Dan opnieuw starten met hetzelfde ID.
@@ -219,13 +350,39 @@ namespace WakeClaude
             Log.Info("Terminal: " + exe + " " + (commandLine.Length > 200 ? commandLine.Substring(0, 200) + "…" : commandLine) + " (in " + s.Folder + ")");
 
             CleanInheritedEnvironment();
-            // Met de shell starten geeft een console-programma een eigen, zichtbaar venster.
-            Process.Start(new ProcessStartInfo(exe, commandLine)
+            // Met de shell starten geeft een console-programma een eigen venster. Verborgen is dat
+            // venster er wel, met een echte console erachter, maar zie je het niet en staat het niet
+            // in de taakbalk: de interface rendert gewoon door. term-show haalt het terug.
+            var process = Process.Start(new ProcessStartInfo(exe, commandLine)
             {
                 UseShellExecute = true,
                 WorkingDirectory = s.Folder,
-                WindowStyle = ProcessWindowStyle.Normal,
+                WindowStyle = visible ? ProcessWindowStyle.Normal : ProcessWindowStyle.Hidden,
             });
+            s.Pid = process != null ? process.Id : 0;
+        }
+
+        /// <summary>
+        /// Wachten tot de sessie zich meldt bij Remote Control. Lukt dat niet, dan wacht het venster
+        /// waarschijnlijk op een vraag; verborgen zou je die nooit zien, dus komt het dan in beeld.
+        /// </summary>
+        static void Ready(TerminalSession s, Options o, Dictionary<string, object> result)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(o.TimeoutSeconds);
+            while (DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(2000);
+                if (Agents.Running().ContainsKey(s.Id))
+                {
+                    result["venster"] = o.Visible ? "zichtbaar" : "verborgen";
+                    return;
+                }
+            }
+            var shown = s.Pid > 0 && ConsoleWindow.Show(s.Pid);
+            if (shown) result["venster"] = "zichtbaar gemaakt";
+            throw new WakeException(ExitCodes.Timeout, "De terminalsessie " + s.Id + " meldt zich niet na " + o.TimeoutSeconds + " s. " +
+                (shown ? "Haar venster staat nu zichtbaar: het wacht waarschijnlijk op een vraag (bv. \"Do you trust this folder?\"). Beantwoord die en draai term-restore."
+                       : "Er is geen venster gevonden; kijk in Taakbeheer of claude.exe nog draait."));
         }
 
         /// <summary>
@@ -274,18 +431,6 @@ namespace WakeClaude
             try { return Directory.Exists(projects) && Directory.EnumerateFiles(projects, id + ".jsonl", SearchOption.AllDirectories).Any(); }
             catch (IOException) { return true; }               // bij twijfel hervatten: dat verliest nooit geschiedenis
             catch (UnauthorizedAccessException) { return true; }
-        }
-
-        static void WaitRunning(string id, int timeoutSeconds)
-        {
-            var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
-            while (DateTime.UtcNow < deadline)
-            {
-                Thread.Sleep(2000);
-                if (Agents.Running().ContainsKey(id)) return;
-            }
-            throw new WakeException(ExitCodes.Timeout, "De terminalsessie " + id + " meldt zich niet na " + timeoutSeconds +
-                " s. Staat het venster open, dan wacht het waarschijnlijk op een vraag (bv. \"Do you trust this folder?\"); beantwoord die en draai term-restore.");
         }
 
         /// <summary>Het echte claude.exe: de npm-wrappers (claude.cmd) zouden de prompt door cmd laten interpreteren.</summary>

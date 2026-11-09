@@ -10,7 +10,7 @@ New-Item -ItemType Directory -Force $out | Out-Null
 
 & $csc.FullName /nologo /target:exe /platform:anycpu /optimize+ /langversion:7.3 `
     "/out:$out\wake-claude.exe" `
-    "/r:$fw\System.dll" "/r:$fw\System.Core.dll" "/r:$fw\System.Web.Extensions.dll" `
+    "/r:$fw\System.dll" "/r:$fw\System.Core.dll" "/r:$fw\System.Web.Extensions.dll" "/r:$fw\System.Management.dll" `
     (Get-ChildItem "$root\src\WakeClaude\*.cs").FullName
 if ($LASTEXITCODE -ne 0) { throw "Compileren mislukt ($LASTEXITCODE)." }
 "Gebouwd: $out\wake-claude.exe"

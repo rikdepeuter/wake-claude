@@ -8,7 +8,7 @@ using System.Threading;
 
 namespace WakeClaude
 {
-    enum Mode { Resume, Fresh, New, Term, TermRestore, TermList, TermForget }
+    enum Mode { Resume, Fresh, New, Term, TermRestore, TermList, TermForget, TermShow, TermHide, TermStop }
 
     /// <summary>Wat te doen met een gestopte sessie die groter is dan --max-context.</summary>
     enum TooLarge { Skip, Replace, Revive }
@@ -40,6 +40,8 @@ namespace WakeClaude
         public TooLarge TooLarge = TooLarge.Skip;
         public int OnlyIfIdleMinutes;
         public int RetryAfterMinutes = 60;
+        /// <summary>Terminalsessies starten verborgen; --visible geeft deze start wel een venster.</summary>
+        public bool Visible;
         public bool DryRun;
         public bool Json;
     }
@@ -108,8 +110,15 @@ wake-claude.exe new   [<naam>] [opties]  altijd nieuw
 Terminalsessies (eigen consolevenster met Remote Control, los van de desktop-app, zonder klikken):
 wake-claude.exe term <naam> [opties]     draait: niets; geregistreerd: terug aanhaken (--resume); anders nieuw
 wake-claude.exe term-restore             alle geregistreerde terminalsessies die niet draaien terug aanhaken
-wake-claude.exe term-list                geregistreerde terminalsessies en of ze draaien
-wake-claude.exe term-forget <naam>       uit het register halen (het venster blijft open)
+wake-claude.exe term-list                geregistreerde sessies, of ze draaien en of hun venster zichtbaar is
+wake-claude.exe term-forget <naam>       uit het register halen (het venster blijft draaien)
+wake-claude.exe term-show <naam>         het verborgen consolevenster tonen
+wake-claude.exe term-hide <naam>         het consolevenster weer verbergen
+wake-claude.exe term-stop <naam>         de sessie sluiten (blijft geregistreerd; term-restore haakt ze terug aan)
+
+Terminalsessies draaien verborgen: geen venster en geen taakbalkknop, maar wel een echte console,
+dus de sessie werkt gewoon door. Meldt een nieuwe sessie zich niet op tijd, dan wordt haar venster
+vanzelf getoond: ze wacht dan meestal op een vraag.
 
 Opties:
   --folder <pad>          map voor een nieuwe sessie (standaard D:\)
@@ -122,6 +131,7 @@ Opties:
   --if-too-large <keuze>  wat dan te doen: skip (standaard), replace of revive
   --only-if-idle <min>    niets doen als er recenter invoer van muis of toetsenbord was
   --retry-after <min>     na een mislukking dezelfde opdracht zo lang met rust laten (standaard 60)
+  --visible               het consolevenster toch tonen; enkel bij term en term-restore
   --dry-run               tonen wat er zou gebeuren, zonder iets te doen
   --json                  resultaat als JSON
 
@@ -214,6 +224,9 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
                 case "term-restore": o.Mode = Mode.TermRestore; break;
                 case "term-list": o.Mode = Mode.TermList; break;
                 case "term-forget": o.Mode = Mode.TermForget; break;
+                case "term-show": o.Mode = Mode.TermShow; break;
+                case "term-hide": o.Mode = Mode.TermHide; break;
+                case "term-stop": o.Mode = Mode.TermStop; break;
                 default: throw new WakeException(ExitCodes.Arguments, "Onbekende modus: " + args[0]);
             }
 
@@ -246,6 +259,7 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
                             default: throw new WakeException(ExitCodes.Arguments, "--if-too-large verwacht skip, replace of revive.");
                         }
                         break;
+                    case "--visible": o.Visible = true; break;
                     case "--dry-run": o.DryRun = true; break;
                     case "--json": o.Json = true; break;
                     default:
@@ -267,6 +281,8 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
                 throw new WakeException(ExitCodes.Arguments, "Map bestaat niet: " + o.Folder);
             // De app-modi typen de prompt teken voor teken in het invoerveld en kunnen de bijlagemap
             // niet openstellen (--add-dir). Daar beloven we dit dus niet.
+            if (o.Visible && o.Mode != Mode.Term && o.Mode != Mode.TermRestore)
+                throw new WakeException(ExitCodes.Arguments, "--visible werkt enkel bij term en term-restore; term-show toont het venster van een sessie die al draait.");
             if ((o.Images.Count > 0 || o.PasteImages) && o.Mode != Mode.Term)
                 throw new WakeException(ExitCodes.Arguments, "--image en --paste-images werken enkel bij term.");
             return o;
@@ -289,6 +305,9 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
                 case Mode.TermRestore: Terminal.Restore(o, result); return;
                 case Mode.TermList: Terminal.List(result); return;
                 case Mode.TermForget: Terminal.Forget(o, result); return;
+                case Mode.TermShow: Terminal.Visibility(o, result, show: true); return;
+                case Mode.TermHide: Terminal.Visibility(o, result, show: false); return;
+                case Mode.TermStop: Terminal.Stop(o, result); return;
             }
 
             if (o.Mode == Mode.New)
@@ -308,8 +327,8 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
 
             Func<Session, bool> isActive = s =>
             {
-                long startedAt;
-                return s.CliSessionId != null && running.TryGetValue(s.CliSessionId, out startedAt) && rcLog.ActiveSince(s.LocalId, startedAt);
+                AgentInfo agent;
+                return s.CliSessionId != null && running.TryGetValue(s.CliSessionId, out agent) && rcLog.ActiveSince(s.LocalId, agent.StartedAt);
             };
 
             var active = matches.FirstOrDefault(isActive);

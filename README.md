@@ -66,10 +66,13 @@ Naast sessies in de desktop-app kan wake-claude sessies starten in een eigen con
 zijbalk van de desktop-app, maar er wordt niets geklikt of getypt en een update van de app sluit ze niet.
 
 ```
-wake-claude.exe term <naam> [--folder <pad>] [--prompt "<tekst>"] [--image <pad>] [--paste-images]
-wake-claude.exe term-restore
+wake-claude.exe term <naam> [--folder <pad>] [--prompt "<tekst>"] [--image <pad>] [--paste-images] [--visible]
+wake-claude.exe term-restore [--visible]
 wake-claude.exe term-list
 wake-claude.exe term-forget <naam>
+wake-claude.exe term-show <naam>
+wake-claude.exe term-hide <naam>
+wake-claude.exe term-stop <naam>
 ```
 
 | modus | draait | geregistreerd, gestopt | onbekend |
@@ -77,14 +80,21 @@ wake-claude.exe term-forget <naam>
 | `term` | niets doen | terug aanhaken | nieuwe starten en registreren |
 | `term-restore` | niets doen | terug aanhaken | - |
 
-- **Register:** `%USERPROFILE%\.wake-claude\terminal-sessions.json` met naam, map en sessie-ID. Het
-  gesprek zelf bewaart Claude Code onder `~/.claude/projects/<map>/<id>.jsonl`.
+- **Register:** `%USERPROFILE%\.wake-claude\terminal-sessions.json` met naam, map, sessie-ID en de pid
+  van de laatste start. Het gesprek zelf bewaart Claude Code onder `~/.claude/projects/<map>/<id>.jsonl`.
 - **Nieuw:** wake-claude kiest zelf het ID en start `claude --session-id <id> --remote-control "<naam>"`,
   met `--prompt` als eerste bericht. Zonder prompt wordt er niets verstuurd en kost het niets.
 - **Terug aanhaken:** `claude --resume <id> --remote-control "<naam>"`. Geschiedenis en Remote
   Control-link blijven dezelfde, en er gaat geen bericht uit: geen tokens. Een sessie zonder één
   bericht heeft nog geen transcript; die start opnieuw met `--session-id` en hetzelfde ID.
 - **Draait ze?** Volgens `claude agents --json`, net als voor de app-sessies.
+- **Verschoven sessie-ID:** `/clear` geeft een draaiend proces een nieuw sessie-ID, terwijl het venster
+  en de Remote Control-naam dezelfde blijven. Het register wees dan naar een ID dat niemand meer draait:
+  `term-list` zei "gestopt" en `term-restore` startte er bij de volgende aanmelding een tweede naast.
+  Daarom zoekt wake-claude voor elke naam die niet bij de draaiende agents staat een `claude.exe` met
+  `--remote-control "<die naam>"` in haar commandoregel (via WMI), en neemt het nieuwe ID over. Dat
+  wordt gemeld als `bijgewerkt`. `term-list` toont het wel maar bewaart het niet, want die modus neemt
+  geen lock; de eerstvolgende schrijvende actie legt het vast.
 - **Omgeving:** gestart vanuit een Claude-sessie erft de exe variabelen als `CLAUDE_CODE_CHILD_SESSION`
   en een `ANTHROPIC_BASE_URL` naar de app; dan meldt de nieuwe sessie zich niet als agent. Alle
   `CLAUDE*`-, `ANTHROPIC*`- en `MCP_*`-variabelen gaan daarom weg, behalve wat in je gebruikers- of
@@ -93,7 +103,35 @@ wake-claude.exe term-forget <naam>
   folder?". Dat beantwoordt wake-claude niet: het weigert te starten en vraagt je eenmalig `claude` in
   die map te starten. Ook een vertrouwde map kan het opnieuw vragen, bv. als `.claude/settings.local.json`
   tools vooraf toestaat; dan meldt de sessie zich niet en zegt de timeout-fout dat het venster wacht.
-- `term-forget` haalt een sessie enkel uit het register; een open venster blijft draaien tot je het sluit.
+- `term-forget` haalt een sessie enkel uit het register; het proces blijft draaien tot je het sluit.
+  Wil je ze echt weg, dan eerst `term-stop` en dan `term-forget`: een vergeten sessie vind je met de
+  andere commando's niet meer terug.
+
+### Verborgen vensters
+
+Terminalsessies starten verborgen (`SW_HIDE`): geen venster op het scherm en geen taakbalkknop. Zo staat
+er na het aanmelden geen rij consolevensters open, want `term-restore` haakt ze allemaal tegelijk terug aan.
+
+Verborgen is niet hetzelfde als zonder console. Het venster bestaat, met een echte console erachter:
+`process.stdout.isTTY` blijft `true`, met de gewone 120x30, dus de interface van Claude Code rendert
+gewoon door, alleen kijkt er niemand naar. Een console helemaal weglaten (`CreateNoWindow` zonder
+shell) zou dat net breken.
+
+- `term-show` en `term-hide` zetten een draaiende sessie om. Tonen gebeurt met `SW_SHOWNOACTIVATE`, dus
+  zonder de focus af te pakken terwijl je elders typt.
+- `--visible` op `term` of `term-restore` geeft die ene start wel een venster.
+- Meldt een nieuwe sessie zich niet binnen de timeout, dan toont wake-claude haar venster vanzelf: ze
+  wacht dan meestal op een vraag, en verborgen zou je die nooit zien.
+- `term-list` toont per sessie of haar venster zichtbaar of verborgen is.
+- Het venster wordt gezocht met `EnumWindows` op klasse `ConsoleWindowClass`; Windows meldt daarbij de
+  pid van het consoleprogramma zelf, niet die van `conhost.exe`. De pid komt uit `claude agents --json`,
+  en voor een sessie die zich daar niet meldt uit het register, maar enkel als dat nog een draaiende
+  `claude.exe` is: pids worden hergebruikt.
+- Host Windows de console zonder eigen venster (Windows Terminal als standaardhost), dan vindt
+  wake-claude niets en zegt dat ook. Op Windows 10 met de klassieke conhost werkt het.
+- `term-stop` sluit het venster met `WM_CLOSE`, zodat de console `CTRL_CLOSE_EVENT` stuurt en Claude Code
+  zelf mag afronden; hangt het proces daarna nog, dan wordt het alsnog afgebroken. De sessie blijft
+  geregistreerd, dus `term-restore` haalt ze gewoon terug.
 
 ## Bijlagen meesturen
 

@@ -189,11 +189,18 @@ namespace WakeClaude
         }
     }
 
+    /// <summary>Een draaiend sessieproces volgens `claude agents --json`.</summary>
+    class AgentInfo
+    {
+        public long StartedAt;
+        public int Pid;
+    }
+
     /// <summary>Draaiende sessieprocessen volgens `claude agents --json`, zonder model.</summary>
     static class Agents
     {
-        /// <summary>cliSessionId → starttijd van het proces (ms).</summary>
-        public static Dictionary<string, long> Running()
+        /// <summary>cliSessionId naar het draaiende proces (starttijd en pid).</summary>
+        public static Dictionary<string, AgentInfo> Running()
         {
             var psi = new ProcessStartInfo("cmd.exe", "/d /c claude agents --json")
             {
@@ -217,11 +224,11 @@ namespace WakeClaude
                 if (list == null)
                     throw new WakeException(ExitCodes.Other, "`claude agents --json` gaf geen lijst terug.");
 
-                var result = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+                var result = new Dictionary<string, AgentInfo>(StringComparer.OrdinalIgnoreCase);
                 foreach (var item in list.OfType<IDictionary<string, object>>())
                 {
                     var id = Json.Str(item, "sessionId");
-                    if (id != null) result[id] = Json.Long(item, "startedAt");
+                    if (id != null) result[id] = new AgentInfo { StartedAt = Json.Long(item, "startedAt"), Pid = (int)Json.Long(item, "pid") };
                 }
                 return result;
             }
