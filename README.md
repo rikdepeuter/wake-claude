@@ -51,6 +51,11 @@ mislukt, `5` timeout, `6` er draait al een wake-claude. Voortgang gaat naar stde
 > Sinds 2026-11-06 is "Remote main" een terminalsessie (zie hieronder) en staat de taak
 > "wake-claude keep-alive" uit. Na een herstart sloeg de keep-alive "Remote main" over: het aanmelden
 > zelf telde als invoer voor `--only-if-idle`. Wat volgt, beschrijft de app-variant.
+>
+> Bereikbaar blijven gebeurt nu via "wake-claude terminal-restore", die elke 10 minuten draait. Dat is
+> een andere aanpak: `term-restore` klikt niet, typt niet en stuurt geen bericht, dus het kost niets en
+> het stoort je niet terwijl je aan de laptop zit. `--only-if-idle` en `--max-context` zijn daar dan
+> ook niet nodig.
 
 `keep-alive.ps1` draait `resume "Remote main" --only-if-idle 3 --if-too-large replace`: is die
 sessie niet meer bereikbaar, dan wordt ze heractiveerd met behoud van context en geschiedenis. Enkel
@@ -172,9 +177,14 @@ houder (`lock.owner`: pid, modus en starttijd). `term-list` en elke `--dry-run` 
 lezen alleen, en het register wordt altijd via een tijdelijk bestand vervangen, dus een lezer ziet de
 oude of de nieuwe inhoud, nooit een halve.
 
-`install-terminal-task.ps1` registreert de taak "wake-claude terminal-restore": 30 s na het aanmelden
-wacht `terminal-restore.ps1` op het netwerk en draait `term-restore`. Log:
-`%USERPROFILE%\.wake-claude\terminal-restore.log`. Deze taak staat los van "wake-claude keep-alive".
+`install-terminal-task.ps1` registreert de taak "wake-claude terminal-restore" met twee triggers: 30 s
+na het aanmelden, en daarna elke 10 minuten onbeperkt. `terminal-restore.ps1` wacht eerst op het
+netwerk en draait dan `term-restore`. Log: `%USERPROFILE%\.wake-claude\terminal-restore.log`.
+
+Die herhaling is de ingang van buitenaf: valt een sessie weg terwijl er niemand aan de laptop zit, dan
+staat ze binnen tien minuten weer klaar. Draaiende sessies worden met rust gelaten en er gaat geen
+bericht uit, dus een ronde die niets te doen heeft, kost ook niets. De taak staat los van
+"wake-claude keep-alive", die enkel app-sessies wekt en daarvoor wel klikt, typt en context verbruikt.
 
 ## Hoe het werkt
 
