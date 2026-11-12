@@ -22,6 +22,13 @@ while ($wacht -lt 120 -and -not (NetwerkOk)) { Start-Sleep -Seconds 5; $wacht +=
 
 # Windows PowerShell 5.1 maakt van stderr van een programma een fout; de exe logt net naar stderr.
 $ErrorActionPreference = 'Continue'
+
+# Eerst opruimen, dan pas aanhaken. Een sessie die je op gelijk welk toestel uit je lijst archiveert,
+# wordt hier afgesloten; zonder deze stap zou term-restore ze meteen weer aanhaken. Loopt de sessie-API
+# mis, dan stopt term-prune met een fout en raakt het niets aan: aanhaken gaat daarna gewoon door.
+& $exe term-prune --json 2>&1 | ForEach-Object { $_.ToString() } | Add-Content $log -Encoding UTF8
+"$(Get-Date -Format s) prune, exitcode $LASTEXITCODE" | Add-Content $log -Encoding UTF8
+
 & $exe term-restore --timeout 120 --json 2>&1 | ForEach-Object { $_.ToString() } | Add-Content $log -Encoding UTF8
 "$(Get-Date -Format s) einde, exitcode $LASTEXITCODE" | Add-Content $log -Encoding UTF8
 

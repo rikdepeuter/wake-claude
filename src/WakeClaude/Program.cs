@@ -8,7 +8,7 @@ using System.Threading;
 
 namespace WakeClaude
 {
-    enum Mode { Resume, Fresh, New, Term, TermRestore, TermList, TermForget, TermShow, TermHide, TermStop }
+    enum Mode { Resume, Fresh, New, Term, TermRestore, TermList, TermForget, TermShow, TermHide, TermStop, TermPrune, TermArchive }
 
     /// <summary>Wat te doen met een gestopte sessie die groter is dan --max-context.</summary>
     enum TooLarge { Skip, Replace, Revive }
@@ -115,6 +115,13 @@ wake-claude.exe term-forget <naam>       uit het register halen (het venster bli
 wake-claude.exe term-show <naam>         het verborgen consolevenster tonen
 wake-claude.exe term-hide <naam>         het consolevenster weer verbergen
 wake-claude.exe term-stop <naam>         de sessie sluiten (blijft geregistreerd; term-restore haakt ze terug aan)
+wake-claude.exe term-prune               elke sessie die aan de accountkant gearchiveerd is, afsluiten
+wake-claude.exe term-archive [<naam>]    een sessie archiveren en afsluiten; zonder naam: de aanroepende sessie
+
+Archiveren gebeurt aan de serverkant, dus vanaf gelijk welk toestel. term-prune vraagt de sessielijst
+op (/v1/code/sessions, met het token van de CLI) en sluit af wat daar gearchiveerd staat. Zo'n sessie
+blijft geregistreerd met stoppedAt erbij: term-restore laat ze met rust, `term <naam>` haalt ze terug
+en zet ze ook uit het archief. Loopt de API mis, dan stopt term-prune met een fout en raakt het niets.
 
 Terminalsessies draaien verborgen: geen venster en geen taakbalkknop, maar wel een echte console,
 dus de sessie werkt gewoon door. Meldt een nieuwe sessie zich niet op tijd, dan wordt haar venster
@@ -227,6 +234,8 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
                 case "term-show": o.Mode = Mode.TermShow; break;
                 case "term-hide": o.Mode = Mode.TermHide; break;
                 case "term-stop": o.Mode = Mode.TermStop; break;
+                case "term-prune": o.Mode = Mode.TermPrune; break;
+                case "term-archive": o.Mode = Mode.TermArchive; break;
                 default: throw new WakeException(ExitCodes.Arguments, "Onbekende modus: " + args[0]);
             }
 
@@ -271,9 +280,10 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
             }
 
             if (o.Name == "") o.Name = null;
-            if (o.Name == null && o.Mode != Mode.New && o.Mode != Mode.TermRestore && o.Mode != Mode.TermList)
+            if (o.Name == null && o.Mode != Mode.New && o.Mode != Mode.TermRestore && o.Mode != Mode.TermList &&
+                o.Mode != Mode.TermPrune && o.Mode != Mode.TermArchive)
                 throw new WakeException(ExitCodes.Arguments, "Een naam is verplicht bij " + args[0] + ".");
-            if (o.Name != null && (o.Mode == Mode.TermRestore || o.Mode == Mode.TermList))
+            if (o.Name != null && (o.Mode == Mode.TermRestore || o.Mode == Mode.TermList || o.Mode == Mode.TermPrune))
                 throw new WakeException(ExitCodes.Arguments, args[0] + " neemt geen naam.");
             if (o.Name != null && (o.Name.Length > 200 || o.Name.Contains("\"") || o.Name.Contains("\n")))
                 throw new WakeException(ExitCodes.Arguments, "Ongeldige naam: maximaal 200 tekens, zonder aanhalingstekens of regeleinden.");
@@ -308,6 +318,8 @@ Exitcodes: 0 gelukt, 1 andere fout, 2 argumenten, 3 app start niet, 4 stap in de
                 case Mode.TermShow: Terminal.Visibility(o, result, show: true); return;
                 case Mode.TermHide: Terminal.Visibility(o, result, show: false); return;
                 case Mode.TermStop: Terminal.Stop(o, result); return;
+                case Mode.TermPrune: Terminal.Prune(o, result); return;
+                case Mode.TermArchive: Terminal.Archive(o, result); return;
             }
 
             if (o.Mode == Mode.New)

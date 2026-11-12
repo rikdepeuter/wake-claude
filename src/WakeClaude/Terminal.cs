@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 
 namespace WakeClaude
@@ -17,6 +18,12 @@ namespace WakeClaude
         public string Created;
         /// <summary>De pid van de laatste start: om haar venster te kunnen tonen of sluiten.</summary>
         public int Pid;
+        /// <summary>Haar id bij de sessie-API (cse_…): daarmee is te zien of ze gearchiveerd is.</summary>
+        public string CseId;
+        /// <summary>Gezet door term-prune: ze is gestopt omdat ze gearchiveerd werd. Restore laat ze met rust.</summary>
+        public string StoppedAt;
+        /// <summary>Uitstel: term-prune raakt deze sessie pas na dit tijdstip aan.</summary>
+        public string PruneAfter;
     }
 
     /// <summary>
@@ -45,6 +52,9 @@ namespace WakeClaude
                     Id = Json.Str(d, "id"),
                     Created = Json.Str(d, "created"),
                     Pid = (int)Json.Long(d, "pid"),
+                    CseId = Json.Str(d, "cseId"),
+                    StoppedAt = Json.Str(d, "stoppedAt"),
+                    PruneAfter = Json.Str(d, "pruneAfter"),
                 }).Where(s => s.Name != null && s.Id != null && s.Folder != null).ToList();
             }
             catch (FileNotFoundException) { return new List<TerminalSession>(); }
@@ -54,9 +64,17 @@ namespace WakeClaude
         static void Save(List<TerminalSession> sessions)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(File));
-            var data = sessions.Select(s => new Dictionary<string, object>
+            var data = sessions.Select(s =>
             {
-                { "name", s.Name }, { "folder", s.Folder }, { "id", s.Id }, { "created", s.Created }, { "pid", (long)s.Pid },
+                var d = new Dictionary<string, object>
+                {
+                    { "name", s.Name }, { "folder", s.Folder }, { "id", s.Id }, { "created", s.Created }, { "pid", (long)s.Pid },
+                };
+                // Lege velden niet wegschrijven: het register blijft zo leesbaar met het blote oog.
+                if (!string.IsNullOrEmpty(s.CseId)) d["cseId"] = s.CseId;
+                if (!string.IsNullOrEmpty(s.StoppedAt)) d["stoppedAt"] = s.StoppedAt;
+                if (!string.IsNullOrEmpty(s.PruneAfter)) d["pruneAfter"] = s.PruneAfter;
+                return d;
             }).ToArray();
             var tmp = File + ".tmp";
             System.IO.File.WriteAllText(tmp, Json.Write(data), Encoding.UTF8);
@@ -87,13 +105,17 @@ namespace WakeClaude
                     return;
                 }
                 result["actie"] = "aangehaakt";
-                result["reden"] = "geregistreerde terminalsessie draait niet";
+                result["reden"] = known.StoppedAt != null
+                    ? "geregistreerde terminalsessie was gestopt na archivering; term haalt ze manueel terug"
+                    : "geregistreerde terminalsessie draait niet";
                 if (!string.IsNullOrWhiteSpace(o.Prompt) || o.Images.Count > 0 || o.PasteImages)
                     result["opmerking"] = "--prompt en bijlagen worden genegeerd bij aanhaken; stuur het bericht via Remote Control";
                 if (o.DryRun) return;
+                if (known.StoppedAt != null) Unstop(known, result);
                 Launch(known, resume: true, prompt: null, visible: o.Visible);
                 Save(sessions);
                 Ready(known, o, result);
+                Remember(known, sessions, result);
                 return;
             }
 
@@ -126,6 +148,45 @@ namespace WakeClaude
                    visible: o.Visible, addDir: bijlagen != null ? bijlagen.Dir : null);
             Save(sessions);   // nu met de pid erbij, zodat haar venster terug te vinden is
             Ready(session, o, result);
+            Remember(session, sessions, result);
+        }
+
+        /// <summary>
+        /// Haar id bij de sessie-API opzoeken en bewaren. Dat is de enige sleutel waarmee later te
+        /// zien is of de sessie gearchiveerd werd: archiveren gebeurt aan de serverkant en laat op
+        /// deze machine geen spoor na. De sessie schrijft die id pas in haar transcript zodra ze met
+        /// Remote Control verbindt, dus dit gebeurt na Ready.
+        /// </summary>
+        static void Remember(TerminalSession s, List<TerminalSession> sessions, Dictionary<string, object> result)
+        {
+            var cse = BridgeId(s.Id);
+            if (cse == null || cse == s.CseId) return;
+            s.CseId = cse;
+            Save(sessions);
+            result["cseId"] = cse;
+        }
+
+        /// <summary>Een gestopte sessie weer in dienst nemen: ook uit het archief halen, anders stopt prune ze straks opnieuw.</summary>
+        static void Unstop(TerminalSession s, Dictionary<string, object> result)
+        {
+            s.StoppedAt = null;
+            s.PruneAfter = null;
+            if (s.CseId == null) return;
+            string reason;
+            var token = Credentials.AccessToken(out reason);
+            try
+            {
+                if (token == null) throw new WakeException(ExitCodes.Other, reason);
+                CodeSessions.Unarchive(token, s.CseId);
+                result["archief"] = "teruggezet";
+            }
+            catch (WakeException e)
+            {
+                // Niet terug kunnen zetten mag het aanhaken niet tegenhouden, maar de sessie zou dan
+                // bij het volgende prune-rondje meteen weer sneuvelen. Vandaar een dag uitstel.
+                s.PruneAfter = DateTime.Now.AddDays(1).ToString("s");
+                result["archief"] = "niet teruggezet (" + e.Message + "); term-prune laat haar een dag met rust";
+            }
         }
 
         /// <summary>term-restore: elke geregistreerde sessie die niet draait, terug aanhaken.</summary>
@@ -135,10 +196,14 @@ namespace WakeClaude
             var sessions = Sync(result, out running, save: !o.DryRun);
             var started = new List<string>();
             var alreadyRunning = new List<string>();
+            var stopped = new List<string>();
             var failed = new List<string>();
 
             foreach (var s in sessions)
             {
+                // Gestopt na archivering: niet terug aanhaken, anders stond ze binnen vijf minuten
+                // weer te draaien. Enkel `term "<naam>"` haalt haar terug.
+                if (s.StoppedAt != null) { stopped.Add(s.Name); continue; }
                 if (running.ContainsKey(s.Id)) { alreadyRunning.Add(s.Name); continue; }
                 if (!Directory.Exists(s.Folder)) { failed.Add(s.Name + " (map bestaat niet: " + s.Folder + ")"); continue; }
                 if (o.DryRun) { started.Add(s.Name); continue; }
@@ -176,6 +241,7 @@ namespace WakeClaude
             result["actie"] = started.Count > 0 ? "aangehaakt" : "niets";
             result["aangehaakt"] = started;
             result["draaiden al"] = alreadyRunning;
+            if (stopped.Count > 0) result["gestopt gelaten"] = stopped;
             if (failed.Count > 0)
             {
                 result["mislukt"] = failed;
@@ -328,6 +394,165 @@ namespace WakeClaude
                 }
             }
             return changed;
+        }
+
+        /// <summary>
+        /// term-prune: elke geregistreerde sessie die aan de accountkant gearchiveerd is, stoppen.
+        /// Archiveren gebeurt op de server, dus dit is het enige punt waar je het op deze machine te
+        /// weten komt. Loopt de API mis, dan gooit Archived() en raakt er geen enkele sessie aan:
+        /// niets doen is altijd beter dan iemands werksessie afsluiten op een halve meting.
+        /// </summary>
+        public static void Prune(Options o, Dictionary<string, object> result)
+        {
+            Dictionary<string, AgentInfo> running;
+            var sessions = Sync(result, out running, save: !o.DryRun);
+
+            string reason;
+            var token = Credentials.AccessToken(out reason);
+            if (token == null)
+            {
+                result["actie"] = "overgeslagen";
+                result["reden"] = reason;
+                return;
+            }
+
+            // Sessies van voor deze functie hebben nog geen cse-id; die staat in hun transcript.
+            var backfilled = new List<string>();
+            foreach (var s in sessions.Where(s => s.CseId == null))
+            {
+                var cse = BridgeId(s.Id);
+                if (cse == null) continue;
+                s.CseId = cse;
+                backfilled.Add(s.Name);
+            }
+            if (backfilled.Count > 0)
+            {
+                result["cseId bijgevuld"] = backfilled;
+                if (!o.DryRun) Save(sessions);
+            }
+
+            var archived = CodeSessions.Archived(token);
+            result["gearchiveerd in account"] = (long)archived.Count;
+
+            var stopped = new List<string>();
+            var deferred = new List<string>();
+            var unknown = new List<string>();
+            var changed = false;
+
+            foreach (var s in sessions)
+            {
+                if (s.StoppedAt != null) continue;                       // al eerder gestopt
+                if (s.CseId == null) { unknown.Add(s.Name); continue; }  // geen sleutel, dus geen oordeel
+                if (!archived.ContainsKey(s.CseId)) continue;            // staat gewoon nog in de lijst
+                if (!Moment.Passed(s.PruneAfter)) { deferred.Add(s.Name + " (tot " + s.PruneAfter + ")"); continue; }
+                // De sessie die wake-claude net aanriep, nooit onder haar eigen voeten wegtrekken.
+                if (o.SessionId != null && string.Equals(o.SessionId, s.Id, StringComparison.OrdinalIgnoreCase))
+                { deferred.Add(s.Name + " (dit is de aanroepende sessie)"); continue; }
+
+                stopped.Add(s.Name);
+                if (o.DryRun) continue;
+                var pid = PidOf(s, running);
+                if (pid > 0) ConsoleWindow.Stop(pid, o.TimeoutSeconds);
+                s.Pid = 0;
+                s.StoppedAt = Moment.Now();
+                changed = true;
+            }
+
+            if (changed) Save(sessions);
+            result["actie"] = stopped.Count > 0 ? "gestopt" : "niets";
+            result["gestopt"] = stopped;
+            if (deferred.Count > 0) result["uitgesteld"] = deferred;
+            if (unknown.Count > 0) result["zonder cseId"] = unknown;
+        }
+
+        /// <summary>
+        /// term-archive: een sessie archiveren, zoals je ze op gelijk welk toestel uit de lijst klikt.
+        /// Gaat het om een andere sessie, dan wordt ze meteen gestopt. Gaat het om de sessie die dit
+        /// zelf aanroept, dan enkel archiveren: ze zou anders haar eigen antwoord afkappen. Het
+        /// prune-rondje van de geplande taak sluit haar bij de volgende ronde af.
+        /// </summary>
+        public static void Archive(Options o, Dictionary<string, object> result)
+        {
+            Dictionary<string, AgentInfo> running;
+            var sessions = Sync(result, out running, save: !o.DryRun);
+
+            var known = o.Name != null
+                ? Find(sessions, o.Name)
+                : sessions.FirstOrDefault(s => string.Equals(s.Id, o.SessionId, StringComparison.OrdinalIgnoreCase));
+            if (known == null)
+                throw new WakeException(ExitCodes.Arguments, o.Name != null
+                    ? "Geen terminalsessie geregistreerd met de naam " + o.Name + "."
+                    : "Deze sessie staat niet in het register van wake-claude; geef een naam op.");
+
+            result["naam"] = known.Name;
+            result["sessie"] = known.Id;
+
+            if (known.CseId == null)
+            {
+                known.CseId = BridgeId(known.Id);
+                if (known.CseId == null)
+                    throw new WakeException(ExitCodes.Other,
+                        "Geen sessie-id (cse_…) gevonden voor " + known.Name + "; is ze al met Remote Control verbonden?");
+                if (!o.DryRun) Save(sessions);
+            }
+
+            var self = o.SessionId != null && string.Equals(o.SessionId, known.Id, StringComparison.OrdinalIgnoreCase);
+            result["actie"] = "gearchiveerd";
+            result["reden"] = self
+                ? "dit is de aanroepende sessie; term-prune sluit haar af bij de volgende ronde van de geplande taak"
+                : "gearchiveerd en meteen gestopt";
+            if (o.DryRun) return;
+
+            string reason;
+            var token = Credentials.AccessToken(out reason);
+            if (token == null) throw new WakeException(ExitCodes.Other, reason);
+            CodeSessions.Archive(token, known.CseId);
+            if (self) return;
+
+            var pid = PidOf(known, running);
+            if (pid > 0) result["hoe"] = ConsoleWindow.Stop(pid, o.TimeoutSeconds);
+            known.Pid = 0;
+            known.StoppedAt = Moment.Now();
+            Save(sessions);
+        }
+
+        static readonly Regex BridgePattern =
+            new Regex("\"bridgeSessionId\"\\s*:\\s*\"(cse_[A-Za-z0-9_-]+)\"", RegexOptions.Compiled);
+
+        /// <summary>
+        /// De id waaronder de sessie-API deze sessie kent (cse_…), uit het staartstuk van haar
+        /// transcript. Het veld bridgeSessionId staat daar bij elke verbinding opnieuw in, dus de
+        /// laatste treffer is de huidige. ~\.claude\sessions\&lt;pid&gt;.json heeft hetzelfde veld,
+        /// maar dat is onbetrouwbaar: het staat er vaak niet in en springt soms terug naar null.
+        /// </summary>
+        static string BridgeId(string sessionId)
+        {
+            var projects = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), @".claude\projects");
+            if (sessionId == null || !Directory.Exists(projects)) return null;
+            string file;
+            try { file = Directory.EnumerateFiles(projects, sessionId + ".jsonl", SearchOption.AllDirectories).FirstOrDefault(); }
+            catch (IOException) { return null; }
+            catch (UnauthorizedAccessException) { return null; }
+            if (file == null) return null;
+
+            try
+            {
+                const int tail = 512 * 1024;
+                string text;
+                using (var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                {
+                    var start = Math.Max(0, fs.Length - tail);
+                    fs.Seek(start, SeekOrigin.Begin);
+                    var buffer = new byte[fs.Length - start];
+                    int read = 0, n;
+                    while (read < buffer.Length && (n = fs.Read(buffer, read, buffer.Length - read)) > 0) read += n;
+                    text = Encoding.UTF8.GetString(buffer, 0, read);
+                }
+                var matches = BridgePattern.Matches(text);
+                return matches.Count == 0 ? null : matches[matches.Count - 1].Groups[1].Value;
+            }
+            catch (IOException) { return null; }
+            catch (UnauthorizedAccessException) { return null; }
         }
 
         // --- starten ---

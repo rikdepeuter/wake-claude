@@ -78,6 +78,8 @@ wake-claude.exe term-forget <naam>
 wake-claude.exe term-show <naam>
 wake-claude.exe term-hide <naam>
 wake-claude.exe term-stop <naam>
+wake-claude.exe term-prune
+wake-claude.exe term-archive [<naam>]
 ```
 
 | modus | draait | geregistreerd, gestopt | onbekend |
@@ -86,7 +88,8 @@ wake-claude.exe term-stop <naam>
 | `term-restore` | niets doen | terug aanhaken | - |
 
 - **Register:** `%USERPROFILE%\.wake-claude\terminal-sessions.json` met naam, map, sessie-ID en de pid
-  van de laatste start. Het gesprek zelf bewaart Claude Code onder `~/.claude/projects/<map>/<id>.jsonl`.
+  van de laatste start, plus `cseId`, `stoppedAt` en `pruneAfter` (zie "Archiveren is afsluiten"). Het
+  gesprek zelf bewaart Claude Code onder `~/.claude/projects/<map>/<id>.jsonl`.
 - **Nieuw:** wake-claude kiest zelf het ID en start `claude --session-id <id> --remote-control "<naam>"`,
   met `--prompt` als eerste bericht. Zonder prompt wordt er niets verstuurd en kost het niets.
 - **Terug aanhaken:** `claude --resume <id> --remote-control "<naam>"`. Geschiedenis en Remote
@@ -111,6 +114,49 @@ wake-claude.exe term-stop <naam>
 - `term-forget` haalt een sessie enkel uit het register; het proces blijft draaien tot je het sluit.
   Wil je ze echt weg, dan eerst `term-stop` en dan `term-forget`: een vergeten sessie vind je met de
   andere commando's niet meer terug.
+
+### Archiveren is afsluiten
+
+Een terminalsessie die je uit je sessielijst archiveert — op claude.ai, je gsm of een andere machine —
+bleef hier gewoon draaien, en `term-restore` haakte ze binnen vijf minuten weer aan. Archiveren gebeurt
+namelijk aan de serverkant: op deze machine is er niets van te zien. De desktop-app bewaart er geen
+bestand van, en het archiefvlagje in `archived-sessions.idx` geldt alleen voor app-sessies op de machine
+waar je het klikt.
+
+Daarom vraagt `term-prune` het aan de sessie-API van Claude Code:
+
+```
+GET  https://api.anthropic.com/v1/code/sessions?limit=100&statuses=archived[&cursor=…]
+POST https://api.anthropic.com/v1/code/sessions/<id>/archive        (200, of 409 als ze het al was)
+POST https://api.anthropic.com/v1/code/sessions/<id>/unarchive
+```
+
+met het OAuth-token uit `~/.claude/.credentials.json` (scope `user:sessions:claude_code`) en
+`anthropic-version: 2023-06-01`. Zet `WAKE_CLAUDE_API` om een ander adres te gebruiken.
+
+- **Koppeling:** de API kent een sessie als `cse_<ULID>`. Die id staat als `bridgeSessionId` in het
+  transcript; `term` bewaart ze bij het starten als `cseId`, en `term-prune` vult ze bij voor sessies
+  van voor deze functie. `~/.claude/sessions/<pid>.json` heeft hetzelfde veld, maar daar ontbreekt het
+  vaak en het springt soms terug naar `null` — het transcript is de betrouwbare bron. Matchen gebeurt
+  op die id en nooit op naam: de titel aan de accountkant drijft af van de Remote Control-naam.
+- **Afsluiten:** staat een geregistreerde sessie in de archieflijst, dan sluit `term-prune` haar venster
+  en zet `stoppedAt` in het register. Ze blijft dus geregistreerd. `term-restore` laat zo'n sessie met
+  rust — zonder dat zou ze bij de volgende ronde weer draaien.
+- **Terughalen:** enkel manueel, met `term "<naam>"`. Dat haakt haar terug aan met haar geschiedenis en
+  haalt haar ook uit het archief, zodat het volgende prune-rondje haar niet opnieuw afsluit. Lukt dat
+  terugzetten niet (API onbereikbaar), dan krijgt ze een dag uitstel via `pruneAfter` en zegt het
+  resultaat dat erbij.
+- **Zelf archiveren:** `term-archive "<naam>"` archiveert een andere sessie én sluit ze meteen af.
+  Zonder naam geldt het de sessie die het commando uitvoert; die wordt enkel gearchiveerd, want ze zou
+  anders haar eigen antwoord afkappen. Het prune-rondje sluit haar af bij de volgende ronde van de taak. De skill
+  `/stop` doet precies dit.
+- **Uitstel:** `pruneAfter` in het register houdt een sessie tot dat tijdstip buiten schot. Gebruikt om
+  sessies die al gearchiveerd waren toen dit erbij kwam, niet allemaal tegelijk af te sluiten.
+- **Veiligheid:** mislukt de API-oproep, dan stopt `term-prune` met een fout en raakt het geen enkele
+  sessie aan. Is het token verlopen, dan slaat het de ronde over (`actie: overgeslagen`). Niets doen is
+  altijd beter dan een werksessie afsluiten op een halve meting. De sessie die `term-prune` zelf
+  aanriep, wordt nooit afgesloten. Let op: dit is geen gedocumenteerde API; breekt ze, dan valt alles
+  stil in plaats van verkeerd.
 
 ### Verborgen vensters
 
@@ -179,7 +225,9 @@ oude of de nieuwe inhoud, nooit een halve.
 
 `install-terminal-task.ps1` registreert de taak "wake-claude terminal-restore" met twee triggers: 30 s
 na het aanmelden, en daarna elke 5 minuten onbeperkt. `terminal-restore.ps1` wacht eerst op het
-netwerk en draait dan `term-restore`. Log: `%USERPROFILE%\.wake-claude\terminal-restore.log`.
+netwerk, draait dan `term-prune` en daarna `term-restore`: eerst opruimen wat je elders archiveerde,
+dan pas aanhaken wat moet blijven draaien. Loopt `term-prune` mis, dan gaat het aanhaken gewoon door.
+Log: `%USERPROFILE%\.wake-claude\terminal-restore.log`.
 
 Onbeperkt herhalen is een herhaaltrigger *zonder* `-RepetitionDuration`: leeg betekent oneindig. Met
 `[TimeSpan]::MaxValue` wordt het `P99999999DT23H59M59S` en weigert de Task Scheduler de XML met
