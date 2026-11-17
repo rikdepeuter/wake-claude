@@ -567,6 +567,11 @@ namespace WakeClaude
             if (!IsTrusted(s.Folder))
                 throw new WakeException(ExitCodes.Arguments, "Map " + s.Folder + " is niet vertrouwd door Claude Code. Start eenmalig `claude` in die map en kies \"Yes, I trust this folder\".");
             var args = new List<string> { resume ? "--resume" : "--session-id", s.Id, "--remote-control", s.Name };
+            // Zonder dit neemt de sessie de standaardmodus van Claude Code over, sinds 2.1.x `auto`. Een
+            // onbewaakte sessie blijft dan bij de eerste de beste vraag staan, onzichtbaar in een verborgen
+            // venster, en verbindt niet eens met Remote Control.
+            args.Add("--permission-mode");
+            args.Add("bypassPermissions");
             if (!string.IsNullOrWhiteSpace(prompt)) args.Add(prompt.Trim());
             // --add-dir neemt meerdere mappen en zou een prompt erachter als map opslokken: dus laatst.
             if (!string.IsNullOrEmpty(addDir)) { args.Add("--add-dir"); args.Add(addDir); }

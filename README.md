@@ -158,6 +158,13 @@ met het OAuth-token uit `~/.claude/.credentials.json` (scope `user:sessions:clau
   aanriep, wordt nooit afgesloten. Let op: dit is geen gedocumenteerde API; breekt ze, dan valt alles
   stil in plaats van verkeerd.
 
+### Permissiemodus
+
+Terminalsessies starten met `--permission-mode bypassPermissions`. Zonder die vlag nemen ze de
+standaardmodus van Claude Code over, en die is sinds 2.1.x `auto`: dan blijft een onbewaakte sessie bij
+de eerste de beste vraag staan, in een verborgen venster waar niemand ze ziet, en meldt ze zich niet eens
+bij Remote Control — `term` loopt dan in zijn timeout.
+
 ### Verborgen vensters
 
 Terminalsessies starten verborgen (`SW_HIDE`): geen venster op het scherm en geen taakbalkknop. Zo staat
