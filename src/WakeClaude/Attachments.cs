@@ -108,10 +108,8 @@ namespace WakeClaude
                 IDictionary<string, object> rij;
                 try { rij = Json.Parse(regel) as IDictionary<string, object>; }
                 catch (Exception) { continue; }
-                if (rij == null || Json.Str(rij, "type") != "user" || Json.Bool(rij, "isSidechain")) continue;
-                var bericht = Veld(rij, "message") as IDictionary<string, object>;
-                if (bericht == null || Json.Str(bericht, "role") != "user") continue;
-                var inhoud = Veld(bericht, "content") as object[];
+                if (rij == null || Json.Bool(rij, "isSidechain")) continue;
+                var inhoud = Inhoud(rij);
                 if (inhoud == null) continue;
 
                 var reeks = new List<KeyValuePair<string, string>>();
@@ -130,6 +128,33 @@ namespace WakeClaude
             if (laatste.Count == 0)
                 throw new WakeException(ExitCodes.Arguments, "Geen geplakte afbeeldingen gevonden in het transcript van deze sessie.");
             return laatste;
+        }
+
+        /// <summary>
+        /// De blokken van een bericht van de gebruiker, in de twee vormen waarin ze in een transcript
+        /// staan. Een gewoon bericht is een rij van soort "user" met message.content. Een bericht dat
+        /// je tikt terwijl de sessie al bezig is, komt er niet als "user" in maar als bijlage van soort
+        /// queued_command, met de blokken in attachment.prompt. Zonder die tweede vorm zag
+        /// --paste-images zo'n bericht over het hoofd en stuurde het stilletjes de beelden van een
+        /// ouder bericht mee: de nieuwe sessie kreeg dan schermafbeeldingen van een andere opdracht.
+        /// </summary>
+        static object[] Inhoud(IDictionary<string, object> rij)
+        {
+            switch (Json.Str(rij, "type"))
+            {
+                case "user":
+                    var bericht = Veld(rij, "message") as IDictionary<string, object>;
+                    return bericht != null && Json.Str(bericht, "role") == "user"
+                        ? Veld(bericht, "content") as object[]
+                        : null;
+                case "attachment":
+                    var bijlage = Veld(rij, "attachment") as IDictionary<string, object>;
+                    return bijlage != null && Json.Str(bijlage, "type") == "queued_command"
+                        ? Veld(bijlage, "prompt") as object[]
+                        : null;
+                default:
+                    return null;
+            }
         }
 
         static string Transcript(string sessionId)
