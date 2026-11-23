@@ -209,11 +209,14 @@ wake-claude.exe term "QGIS-situatie" --prompt "waarom valideert dit niet?" --pas
   (`CLAUDE_CODE_SESSION_ID`), uit het laatste bericht dat er bevat. Geplakte beelden staan daar als
   base64; ze worden gedecodeerd naar `geplakt-1.png` enzovoort. Buiten een Claude-sessie faalt dit met
   een uitleg: gebruik dan `--image`.
-- **`--add-dir`** wordt meegegeven voor de bijlagemap, zodat de sessie er zonder toestemmingsvraag bij
-  kan. Die vlag staat achteraan op de commandoregel: ze neemt meerdere mappen en zou een prompt die
-  erachter staat als map opslokken.
-- Enkel bij `term`. De app-modi typen de prompt teken voor teken in het invoerveld en kunnen `--add-dir`
-  niet meegeven, dus daar wordt het geweigerd. Bij terug aanhaken gaat er sowieso geen bericht uit.
+- **Geen `--add-dir`.** Die vlag leek logisch voor de bijlagemap, maar met haar erbij deed de CLI er
+  ongeveer twee minuten over voor ze met Remote Control verbond; zonder is ze er in enkele seconden.
+  wake-claude wacht standaard 60 s en meldde dus exitcode 5 terwijl de sessie gewoon aan het opstarten
+  was, waarna een tweede sessie met dezelfde naam aan dezelfde opdracht begon. De bijlagen zijn ook
+  zonder de vlag leesbaar: `term` start in `bypassPermissions`, en zet `~/.wake-claude/attachments`
+  anders in `permissions.additionalDirectories` van je globale settings.
+- Enkel bij `term`. De app-modi typen de prompt teken voor teken in het invoerveld; bij terug aanhaken
+  gaat er sowieso geen bericht uit.
 
 ## Eén run tegelijk
 
