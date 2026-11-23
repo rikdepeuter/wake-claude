@@ -145,7 +145,7 @@ namespace WakeClaude
             sessions.Add(session);
             Save(sessions);
             Launch(session, resume: false, prompt: Attachments.Decorate(o.Prompt, bijlagen),
-                   visible: o.Visible, addDir: bijlagen != null ? bijlagen.Dir : null);
+                   visible: o.Visible);
             Save(sessions);   // nu met de pid erbij, zodat haar venster terug te vinden is
             Ready(session, o, result);
             Remember(session, sessions, result);
@@ -557,7 +557,7 @@ namespace WakeClaude
 
         // --- starten ---
 
-        static void Launch(TerminalSession s, bool resume, string prompt, bool visible, string addDir = null)
+        static void Launch(TerminalSession s, bool resume, string prompt, bool visible)
         {
             // Een sessie zonder één bericht heeft nog geen transcript; --resume vindt dan niets en stopt.
             // Dan opnieuw starten met hetzelfde ID.
@@ -573,8 +573,12 @@ namespace WakeClaude
             args.Add("--permission-mode");
             args.Add("bypassPermissions");
             if (!string.IsNullOrWhiteSpace(prompt)) args.Add(prompt.Trim());
-            // --add-dir neemt meerdere mappen en zou een prompt erachter als map opslokken: dus laatst.
-            if (!string.IsNullOrEmpty(addDir)) { args.Add("--add-dir"); args.Add(addDir); }
+            // Geen --add-dir voor de bijlagemap. Met die vlag doet de CLI er twee minuten over voor ze
+            // met Remote Control verbindt; zonder is ze er in enkele seconden. wake-claude wacht
+            // standaard 60 s en meldde dan ten onrechte dat het starten mislukt was, waarna een tweede
+            // sessie met dezelfde naam dezelfde opdracht begon. De bijlagen zijn ook zonder de vlag
+            // leesbaar: de sessie draait in bypassPermissions, en ~\.wake-claude\attachments staat in
+            // permissions.additionalDirectories van de globale settings.
             var exe = ClaudeExe();
             var commandLine = string.Join(" ", args.Select(Quote));
             Log.Info("Terminal: " + exe + " " + (commandLine.Length > 200 ? commandLine.Substring(0, 200) + "…" : commandLine) + " (in " + s.Folder + ")");
